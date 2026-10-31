@@ -157,7 +157,7 @@ send_alert() {
     local out
     echo "$1"
     [[ -n "${3:-}" ]] && printf '%s\n' "${3//$'\t'/ — }"
-    out="$(notify_fault "$1" "$2" "$HEALTH_NTFY_ID" 2>&1)"
+    out="$(fault_open "$HEALTH_NTFY_ID" "$1" "$2" 2>&1)"
     if [[ -n "$out" ]]; then
         echo "changedetection.health: ntfy publish FAILED, the report above was not delivered: ${out}" >&2
         exit 1
@@ -352,4 +352,14 @@ fi
 # Silence is the healthy state, matching restic.staleness — no OnSuccess chatter.
 if [[ -n "${REPORT//[[:space:]]/}" ]]; then
     send_alert "$(report_title "$REPORT")" "$(report_body "$REPORT")" "$REPORT"
+elif [[ -n "$current" ]]; then
+    # Clean, AND the API answered (the WATCH_COUNT marker arrived) — only then is the
+    # silence a real all-clear rather than a run that saw nothing. A watch whose site
+    # came back turns its finding on the phone into "<Watch>: Working" (ntfy.lib.sh
+    # fault_close, the recovery rule). A lost recovery fails the unit, like a lost alert.
+    out="$(fault_close "$HEALTH_NTFY_ID" Working "Every watch is being checked again." 2>&1)"
+    if [[ -n "$out" ]]; then
+        echo "changedetection.health: ntfy publish FAILED, the recovery was not delivered: ${out}" >&2
+        exit 1
+    fi
 fi

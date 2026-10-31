@@ -517,8 +517,18 @@ for k in "${OUT_ORDER[@]:-}"; do
     tail=""
     [[ "$k" == "${OUT_ORDER[-1]}" && "$TRUNCATED" -gt 0 ]] \
         && tail="$(body_aside "${TRUNCATED} more still queued")"
-    notify_receipt "$(title_count "$verb" "${OUT_N[$k]}" "$noun")" \
-        "$(body_join "$(body_list "${items[@]}")" "$tail")"
+    body="$(body_join "$(body_list "${items[@]}")" "$tail")"
+    # The KIND follows the verb (2026-10-31). Only a result you asked for is a receipt —
+    # stems finished, or a request that was already done. Every other verb is a
+    # failure and goes out as one; they were all receipts before, which made "sent
+    # as a receipt" mean nothing and left the receipt gate in systemd/contract.sh
+    # unable to tell this loop's good news from its bad. Literal verbs on the two
+    # receipt arms are what let that gate read them.
+    case "$verb" in
+        Finished) notify_receipt "$(title_count Finished "${OUT_N[$k]}" "$noun")" "$body" ;;
+        Skipped)  notify_receipt "$(title_count Skipped "${OUT_N[$k]}" "$noun")" "$body" ;;
+        *)        notify_fault "$(title_count "$verb" "${OUT_N[$k]}" "$noun")" "$body" ;;
+    esac
 done
 (( ${#LINES[@]} > 0 )) && log "notified ${#OUT_ORDER[@]} outcome group(s), ${#LINES[@]} line(s)"
 

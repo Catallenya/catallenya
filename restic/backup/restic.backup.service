@@ -8,10 +8,11 @@
 
 [Unit]
 Description=Restic Backup
-# Kept, unlike the other restic jobs' silence: this is the one whose success is
-# worth confirming, because a night without it is a night of data at risk and the
-# ping is once a day at most.
-OnSuccess=system-ntfy@restic.backup.service
+# NO OnSuccess= (removed 2026-10-31, and install.sh now refuses one on every class).
+# The daily "Backup: Succeeded" was kept as the only proof the courier still reached
+# the phone; courier.selftest.service proves that off the phone now. A night with no
+# backup is still caught: a failure alerts through the inherited OnFailure=, and a run
+# that never starts is caught by restic.staleness at 48h and the watchdog at 72h.
 
 [Service]
 User=carrein

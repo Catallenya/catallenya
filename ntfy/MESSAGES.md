@@ -119,7 +119,7 @@ title_count Blocked 1 Document                      # Blocked: 1 Document
 title_count "Still Staged" 3 Document "" "[1d]"     # Still Staged: 3 Documents [1d]
 title_count Flagged 1 Event "Kene"                  # Flagged: Kene
 title_state zpool "78% Full"                        # zpool: 78% Full
-title_state Backup Succeeded                        # Backup: Succeeded
+title_state Backup Failed                           # Backup: Failed
 title_quote "Kene" "$(title_pos 2 4)"               # Kene [2/4]
 title_quote "Kene" "$(title_age 31)"                # Kene [1d]
 ```
@@ -387,6 +387,30 @@ title plus body regardless. Their value is entirely structural — a receipt has
 argument to put a button in, a proposal cannot omit the sequence-id that makes it
 withdrawable — and it is what lets the gate refuse a bare `notify()`.
 
+### The fault lifecycle — a fault that heals itself says so
+
+`fault_open` / `fault_close` in `ntfy/ntfy.lib.sh` (2026-10-31), the same one-call
+lifecycle shape as `paused_sync`:
+
+```bash
+fault_open  <id> <title> <body>     the fault is present this run (publishes as notify_fault)
+fault_close <id> <state> [prose]    the fault is absent this run
+```
+
+A caller asks one of the two on **every** run. `fault_open` leaves a marker in
+`systemd/state/.faults/`; `fault_close` is a no-op without one, and with one it publishes
+`<same subject>: <state>` on the **same sequence id** — so `ArchiveBox: Unreachable`
+becomes `ArchiveBox: Reachable` in place on the phone — and removes the marker. The id is
+the stable one the fault already carried, so nothing new identifies a fault. Nothing is
+withdrawn: the fault is overwritten by a message saying what happened, which keeps the
+withdrawal rule below intact. Output-transparent like `notify_fault`. `NTFY_FAULT_DIR` is
+the test seam; a muted run without it touches no marker.
+
+The same rule for **any job the courier reports**: a failure goes out under
+`unit-<name>` and leaves a marker, and `ntfy/recovered.sh` — run by the base policy as an
+`ExecStartPost=` after every successful run — publishes `<Job>: Recovered` over it. No job
+carries a line of its own for this.
+
 ### The withdrawal rule
 
 > **A notification with buttons may be withdrawn. A notification without buttons is
@@ -452,7 +476,7 @@ replacement. Do not restore the old behaviour without revisiting the rule.
 | 8 | Keep the digit at 1 | `Blocked: 1 Document` |
 | 9 | Title Case nouns | `3 Documents` |
 | 10 | Identifiers keep their real case; words get Title Case | `zpool: 78% Full` |
-| 11 | The state slot carries a number where one naturally fits, otherwise a bare participle or phrase. **Strong preference for the number** | `zpool: 78% Full` · `Backup: Succeeded` |
+| 11 | The state slot carries a number where one naturally fits, otherwise a bare participle or phrase. **Strong preference for the number** | `zpool: 78% Full` · `Backup: Failed` |
 | 12 | The digest noun is `Findings` | `Watches: 3 Findings` |
 | 13 | Every qualifier rides in square brackets | `[2/4]` `[1d]` `[Unpaid]` `[restic]` |
 | 14 | Cap ~40 chars. **The verb is never what truncates** | `Finished: Godspeed You! Black Emperor -…` |
@@ -462,7 +486,7 @@ replacement. Do not restore the old behaviour without revisiting the rule.
 
 | # | Rule |
 |---|---|
-| 16 | Silence is the healthy state — with the deliberate exceptions in §6 |
+| 16 | **Quiet on success** (owner, 2026-10-31). Every notification is one of four things: a **failure**; a **decision waiting for you**; the **result of something you asked for**, including a failure that has since recovered; or a **change in how your requests will be handled**. Never "all fine". Proof that the alert path works goes to an outside watcher, never the phone. Enforced twice: `install.sh` refuses `OnSuccess=` on every class, and `systemd/contract.sh` refuses a `notify_receipt` whose word is not in `NTFY_RECEIPT_VERBS` (`ntfy/kinds.sh`) |
 | 17 | The imperative lives on the **button**; the title only ever reports |
 | 18 | A notification with buttons may be withdrawn; one without buttons never is — see §4 |
 
@@ -488,8 +512,8 @@ service that exemplifies it.
 | 10 | Name the watch only at exactly one | changedetection | two or more and the title becomes a list; `Watches: 3 Findings` is the honest summary |
 | 11 | Three faults are **digests**, so their state is caller-built text | disk, changedetection, watchdog | disk covers root *and* zpool; changedetection covers N problems of mixed types; the watchdog covers N mixed findings. The gate checks the shape, not the content |
 | 12 | `system-ntfy.sh` is **exempt** from the constructors | courier | it is the alarm of last resort and must depend on as little as possible, including on another file in this repo being intact. It matches the grammar by hand; the gate checks it by pattern |
-| 13 | The courier's **success branch is the canary** | restic | `restic.backup`, `restic.forget` and `restic.check@` wire `OnSuccess=`. Those pings are the only positive proof the `OnFailure=` path still reaches the phone — nothing watches the courier. **Only the daily backup ping is frequent enough to serve.** Do not delete it |
-| 14 | `restic.staleness` is failure-only **by design** | restic | silence is the healthy state, and `install.sh` mechanically refuses `OnSuccess=` on `Class=monitor` |
+| 13 | The courier is watched by its **own dead man's switch**, off the phone | ntfy | Until 2026-10-31 restic's daily `Backup: Succeeded` was the only proof the courier still worked — a notification every morning that said nothing. `courier.selftest.timer` (08:30 SGT) now makes the courier publish to the unsubscribed `courier-canary` topic over the real alert path and ping a healthchecks.io check only if ntfy accepted it; healthchecks.io alarms when the ping stops. A broken self-test fails loud the same way, which is where the "who watches the watcher" chain ends. The ping URL (`HEALTHCHECKS_COURIER_PING_URL`) is a secret in `.env` |
+| 14 | Every restic job is failure-only **by design** | restic | silence is the healthy state, and `install.sh` mechanically refuses `OnSuccess=` on every class |
 | 15 | Boot reports failure only | host | dropped from success on 2026-08-20. Accepted consequence: after a power cut, silence no longer distinguishes *recovered* from *still dark*, and this box does not auto-restore on AC return |
 | 16 | **The courier's body is the job's own words** | `system-ntfy.sh` | one body serves every job failure and all three scheduled restic successes, and `systemctl status` spent ~18 lines on boilerplate before reaching anything a person wants. Scoped to `_SYSTEMD_INVOCATION_ID` so it cannot bleed across runs — `restic.staleness` prints one line a day, so a failure used to arrive under five previous days of "within the 48h limit" — and to `_TRANSPORT=stdout` so systemd's own Starting/Finished lines cannot fill the budget, which is what happened to `disk`, a job that prints nothing when healthy |
 | 17 | **`catallenya.service` cancels its inherited `OnFailure=`** | host | see the self-alerting rule below |
@@ -566,8 +590,11 @@ One notification **per verb present in the run**.
 | could not move a stray | `Stuck: 1 File` |
 
 Bounded by `MAX_PER_RUN=3`, so at most three distinct failure verbs. Typical run 2
-notifications, bad run 4, worst realistic 6. These are receipts — no sequence id, no
-actions, nothing to retract — so multiplying them adds no lifecycle logic.
+notifications, bad run 4, worst realistic 6. `Downloaded`, `Finished` and `Skipped` are
+**receipts** (the result of your request); every other verb goes out as a **fault**
+(2026-10-31 — all were receipts before, which left the receipt gate unable to tell this
+loop's good news from its bad). Neither carries a sequence id or actions, so multiplying
+them adds no lifecycle logic.
 
 ### immich — topic `immich`
 
@@ -588,12 +615,15 @@ stdout (§ 8). This one adds the parsed counts instead, which the courier cannot
 
 ### restic — topic `restic`, via the courier
 
-| Job | Cadence | Success | Failure |
+| Job | Cadence | Failure | Next success after a failure |
 |---|---|---|---|
-| `restic.backup` | daily, 00:00–01:00 | `Backup: Succeeded` | `Backup: Failed` |
-| `restic.forget` | weekly, Mon 06:00–07:00 | `Forget: Succeeded` | `Forget: Failed` |
-| `restic.check@subset` | monthly, 1st 03:00–04:00 | `Check Data Subset: Succeeded` | `Check Data Subset: Failed` |
-| `restic.staleness` | daily 09:00 | *(none — see nuance 14)* | `Staleness: Failed` |
+| `restic.backup` | daily, 00:00–01:00 | `Backup: Failed` | `Backup: Recovered` |
+| `restic.forget` | weekly, Mon 06:00–07:00 | `Forget: Failed` | `Forget: Recovered` |
+| `restic.check@subset` | monthly, 1st 03:00–04:00 | `Check Data Subset: Failed` | `Check Data Subset: Recovered` |
+| `restic.staleness` | daily 09:00 | `Staleness: Failed` | `Staleness: Recovered` |
+
+A success is silent (nuance 14). The recovery replaces the failure in place — see § 4,
+the fault lifecycle — and every other job the courier reports behaves the same way.
 
 All carry `RandomizedDelaySec=3600`, hence the one-hour windows.
 
@@ -601,7 +631,7 @@ Two check modes are **manual-only** and so have no cadence row: `check@meta`
 (structural pass alone, unscheduled 2026-08-07) and `check@data` (full `--read-data`,
 unscheduled 2026-08-22 — the monthly `n/6` rotation reads the whole repository twice
 a year and supersedes it). Both still emit through the courier when run by hand, as
-`Check Metadata: Succeeded` / `Failed` and `Check Data: Succeeded` / `Failed`; the
+`Check Metadata: Failed` and `Check Data: Failed`; the
 branches that spell those out are in `system-ntfy.sh`, which is why a manual run does
 not title itself `Check@meta`. They are listed here because this file is the record
 of *every* title the system can produce, not only the scheduled ones.
@@ -639,6 +669,9 @@ failed (`Dropped` or `Abandoned`) that saves after all: it closes its own loop w
 | newest backup older than 7 days | fault, id `grayjay-backup` | `Backup: 8 Days Old` |
 | an allow-listed playlist UUID is absent | fault, id `grayjay-missing-<Tag>` | `Guitar: Missing` |
 | ArchiveBox could not be asked, or refused `add` | fault, id `grayjay-archivebox` | `ArchiveBox: Unreachable` |
+| ArchiveBox answers again | recovery, same id | `ArchiveBox: Reachable` |
+| the backup opens and is fresh again | recovery, id `grayjay-backup` | `Backup: Current` |
+| a missing playlist is back | recovery, id `grayjay-missing-<Tag>` | `Guitar: Found` |
 
 `Dropped` is liquidroom's word reused, because the situation is the same one: a
 download failed. Between the first failure and day 7 the video is retried daily in
@@ -663,6 +696,14 @@ watchdog.
 | two or more wrong | `changedetection` | `Watches: 3 Findings` |
 | container down | `changedetection` | `Changedetection: Not Running` |
 | any watchdog finding | `host` | `Watchdog: 3 Findings` |
+| the next roll call is clean | `host` | `Watchdog: All Clear` (same id) |
+| a container finding clears on its own | `host` | `Containers: Running` · `immich-server: Running` (same id) |
+| a watch finding clears | `changedetection` | `Yellowpaige Shop: Working` · `Watches: Working` (same id) |
+| the watchdog stalled, then runs again | `host` | `Watchdog: Stalled` → `Watchdog: Running` (deadman, same id) |
+| any courier-reported job succeeds after failing | routed | `Backup: Recovered` · `Sync: Recovered [filmhouse]` |
+
+`disk` and `smart` deliberately send **no** recovery: you fix those yourself, so you
+already know (owner, 2026-10-31). Recovery is for faults that heal without you.
 | any unit's `OnFailure=` | routed | `Backup: Failed` · `[restic]` appended when rerouted |
 
 ---
@@ -701,8 +742,8 @@ briefly cancelled its inherited `OnFailure=` to send one message instead of two.
 reasons for reverting:
 
 - **The courier's copy is the only evidence the `OnFailure=` path still works for that
-  unit.** Same argument that keeps restic's success pings: mute a job, and if its own
-  notify quietly breaks, nothing reports that the path is dead.
+  unit.** Mute a job, and if its own notify quietly breaks, nothing reports that the
+  path is dead.
 - **It closes the one real blind spot.** A script that dies BEFORE reaching its notify —
   a missing `.env`, an OOM, a timeout kill — has sent nothing. With the courier muted,
   that is silent until the watchdog notices, up to 36h later for a daily job. With it
@@ -882,7 +923,7 @@ sits at `changedetection.json.bak.pre-contract`.
 
 ## 9. Enforcement
 
-`systemd/contract.sh`, ten rules, run by `bash systemd/install.sh --check` (no root
+`systemd/contract.sh`, eleven rules, run by `bash systemd/install.sh --check` (no root
 needed) and by `systemd/tests/run.sh`. **Since 2026-08-23 that command is also a CI job
 and a `ci/pre-push` hook** — before then it ran only when a human typed it, and a unit
 it refuses reached `main` green:
@@ -916,15 +957,25 @@ it refuses reached `main` green:
     sanctioned hand-built emitter (§8b), so what is checked is only the part that is
     unambiguous regardless of who assembled the string: the two headers with no legal
     value left anywhere in this system.
+11. **A receipt carries an approved word** (2026-10-31). Quiet on success: the receipt is
+    the one kind that can say good news, so its verb (`title_count`) or state
+    (`title_state`) must be in `NTFY_RECEIPT_VERBS` in `ntfy/kinds.sh`. **Repo-wide**,
+    unlike rules 1–9, which run only over intake-family trees — most receipts live
+    outside them. A title variable is followed to its nearest earlier assignment; a word
+    that is itself a variable is refused, because nothing static can read it.
+    Alongside it, `install.sh` refuses `OnSuccess=` on every class.
 
-Rules 1–3 are about the title, 4–6 about the envelope, 7–8 about the body.
+Rules 1–3 are about the title, 4–6 about the envelope, 7–8 about the body, 11 about
+what is allowed to be good news.
 
 Gate rule 3 is what stops a new service breaking rule 3-of-§5 silently. It refuses
 `Processing`, `Uploading`, `Waiting` — **and** `Stray`, `Unclear`, `Timeout`, which a
 looser `-ing`-only check would have waved through. Both of those adjectives were proposed
 during design.
 
-**Vocabulary is declared per feature, never centrally.** Each feature's lib sets its own
+**Vocabulary is declared per feature, never centrally** — with one deliberate exception,
+`NTFY_RECEIPT_VERBS`, where each entry is an owner's decision that a piece of good news
+earns a buzz and the friction of a central line is the point. Each feature's lib sets its own
 `NTFY_VERBS` / `NTFY_NOUNS` / `NTFY_SUBJECTS`. This is the same shape as
 `[X-Catallenya] Class=`: the thing declares, and nothing repeats it in a map. A central
 verb table would be the `SUBSCRIBED` list again — hand-maintained, and it silently ate

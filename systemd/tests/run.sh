@@ -116,7 +116,7 @@ gate_says "cancelling OnFailure= without declaring it is refused" \
     "cancels its inherited OnFailure="
 gate_says "and the acknowledgement is what clears it" \
     "${REPO}/host/disk.service" 's/^\[Service\]$/OnFailure=\n[Service]/; s/^Class=monitor$/Class=monitor\nSelfAlerting=acknowledged/' \
-    "52 units satisfy the contract"
+    "54 units satisfy the contract"
 
 gate_says "a missing User= is refused" \
     "${REPO}/host/disk.service" '/^User=/d' "no explicit User="
@@ -190,6 +190,12 @@ gate_says "SuccessExitStatus= is refused (false healthy stamp)" \
 
 gate_says "a monitor declaring OnSuccess= is refused" \
     "${REPO}/host/disk.service" 's|^\[Unit\]|[Unit]\nOnSuccess=system-ntfy@disk.service|' \
+    "must not declare OnSuccess="
+# Every class since 2026-10-31, not only monitor: quiet on success is fleet-wide, and
+# the restic trio were the last units wiring it. restic.backup is the case that matters
+# — it is exactly the line that was removed, so this is the regression test for it.
+gate_says "a scheduled job declaring OnSuccess= is refused too" \
+    "${REPO}/restic/backup/restic.backup.service" 's|^\[Unit\]|[Unit]\nOnSuccess=system-ntfy@restic.backup.service|' \
     "must not declare OnSuccess="
 
 # The exemption must be EXPLICIT: absent is still refused, acknowledged passes.
@@ -693,6 +699,47 @@ contract_clean "a Still verb satisfies it"
 # the age bracket is what marks it.
 contract_fixture 'notify_nudge "$(title_quote "$t" "$(title_age "$h")")" "$b" "$id"'
 contract_clean "and so does an age bracket"
+
+echo
+# ------------------------------------------------- the receipt contract
+# Quiet on success (2026-10-31): a receipt may only carry a word from
+# NTFY_RECEIPT_VERBS. Repo-wide, so it is staged in its own tree rather than the
+# intake fixture — receipt_contract walks a directory, not a pipeline.
+echo "receipt contract"
+RFIX="$(mktemp -d)"; mkdir -p "${RFIX}/feature"
+receipt_says() { # $1=name $2=script $3=expected substring, or "" for clean
+    printf '%s\n' "$2" > "${RFIX}/feature/job.sh"
+    ERRORS=(); receipt_contract "$RFIX"
+    local joined="${ERRORS[*]:-}"
+    if [[ -z "$3" ]]; then
+        (( ${#ERRORS[@]} == 0 )) && ok "$1" || bad "$1" "no error" "$joined"
+    else
+        [[ "$joined" == *"$3"* ]] && ok "$1" || bad "$1" "contains $3" "${joined:-<no error>}"
+    fi
+}
+receipt_says "an approved receipt word passes" \
+    'notify_receipt "$(title_count Finished 1 Track)" "$b"' ""
+receipt_says "an unapproved one is refused — no 'all fine' receipts" \
+    'notify_receipt "$(title_count Synced 3 Thing)" "$b"' "not an approved receipt word"
+receipt_says "a title_state receipt is judged by its state" \
+    'notify_receipt "$(title_state Backup Succeeded)" "$b"' "says 'Succeeded'"
+receipt_says "a title variable is followed to its nearest assignment" \
+    't="$(title_count Dropped 1 Video)"
+t="$(title_count Archived 1 Video)"
+notify_receipt "$t" "$b"' ""
+receipt_says "…and refused when that assignment is not approved" \
+    't="$(title_count Archived 1 Video)"
+t="$(title_count Synced 1 Video)"
+notify_receipt "$t" "$b"' "says 'Synced'"
+receipt_says "a word held in a variable cannot be read, so it is refused" \
+    'notify_receipt "$(title_count "$verb" 1 Track)" "$b"' "is not a literal"
+receipt_says "a receipt wrapped across lines is still read" \
+    'notify_receipt \
+    "$(title_count Synced 1 Thing)" "$b"' "says 'Synced'"
+rm -rf "$RFIX"
+ERRORS=(); receipt_contract "$REPO"
+(( ${#ERRORS[@]} == 0 )) && ok "every receipt in the live tree carries an approved word" \
+    || bad "every receipt in the live tree carries an approved word" "no error" "${ERRORS[*]}"
 
 rm -rf "$FIX"
 

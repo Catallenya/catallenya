@@ -201,7 +201,7 @@ if (( hb_age < 0 )); then
                      "Expected at ${HEARTBEAT_STAMP}")" \
         "Nothing is checking whether the other jobs still run. A stopped restic, sanoid, disk or SMART job would look exactly like a healthy one.")"
     echo "deadman: heartbeat stamp missing at ${HEARTBEAT_STAMP}" >&2
-    out="$(notify_fault "$(title_state "Watchdog" "Stalled")" "$hb_body" "$HEARTBEAT_NTFY_ID" 2>&1)"
+    out="$(fault_open "$HEARTBEAT_NTFY_ID" "$(title_state "Watchdog" "Stalled")" "$hb_body" 2>&1)"
     [[ -n "$out" ]] && echo "deadman: and the ntfy alert about it also failed: ${out}" >&2
 elif (( hb_age > hb_max )); then
     hb_body="$(body_join \
@@ -209,8 +209,13 @@ elif (( hb_age > hb_max )); then
                      "Its own limit is ${HEARTBEAT_MAX_AGE}")" \
         "Nothing is checking whether the other jobs still run. A stopped restic, sanoid, disk or SMART job would look exactly like a healthy one.")"
     echo "deadman: heartbeat is stale — $(( hb_age / 3600 ))h against ${HEARTBEAT_MAX_AGE}" >&2
-    out="$(notify_fault "$(title_state "Watchdog" "Stalled")" "$hb_body" "$HEARTBEAT_NTFY_ID" 2>&1)"
+    out="$(fault_open "$HEARTBEAT_NTFY_ID" "$(title_state "Watchdog" "Stalled")" "$hb_body" 2>&1)"
     [[ -n "$out" ]] && echo "deadman: and the ntfy alert about it also failed: ${out}" >&2
+else
+    # The watchdog is running again: a "Watchdog: Stalled" sent earlier becomes
+    # "Watchdog: Running" (ntfy.lib.sh fault_close, the recovery rule). No marker, no message.
+    out="$(fault_close "$HEARTBEAT_NTFY_ID" Running "The daily roll call is completing again." 2>&1)"
+    [[ -n "$out" ]] && echo "deadman: the watchdog recovery notification failed: ${out}" >&2
 fi
 
 # Silence is the healthy state. The ping IS the output.

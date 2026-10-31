@@ -301,7 +301,7 @@ report_title() {
 # is ntfy itself.
 send_alert() {
     local out
-    out="$(notify_fault "$1" "$2" "$CONTAINERS_NTFY_ID" 2>&1)"
+    out="$(fault_open "$CONTAINERS_NTFY_ID" "$1" "$2" 2>&1)"
     if [[ -n "$out" ]]; then
         echo "containers: ntfy publish FAILED, the report above was not delivered: ${out}" >&2
         return 1
@@ -346,7 +346,18 @@ REAL=()
 for f in "${FINDINGS[@]:-}"; do
     [[ -n "$f" ]] && REAL+=("$f")
 done
-(( ${#REAL[@]} > 0 )) || exit 0
+if (( ${#REAL[@]} == 0 )); then
+    # A clean pass closes whatever this job last reported: a container that restarted
+    # on its own turns the finding on the phone into "Containers: Running" — the
+    # recovery rule (ntfy.lib.sh fault_close). No marker, no message. A lost recovery
+    # fails the unit exactly as a lost finding does.
+    out="$(fault_close "$CONTAINERS_NTFY_ID" Running "Every expected container is running and healthy." 2>&1)"
+    if [[ -n "$out" ]]; then
+        echo "containers: ntfy publish FAILED, the recovery was not delivered: ${out}" >&2
+        exit 1
+    fi
+    exit 0
+fi
 
 FINDINGS=("${REAL[@]}")
 ITEMS=()

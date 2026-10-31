@@ -60,6 +60,24 @@ NTFY_MODEL_VERBS=("Model Failed" "Model Paused")
 # waved both through.
 NTFY_IRREGULAR_VERBS=(Stuck)
 
+# THE ONLY WORDS A RECEIPT MAY CARRY (owner, 2026-10-31). Quiet on success is the
+# rule: a notification is a failure, a decision waiting for you, the result of
+# something you asked for (including a failure that has since recovered), or a change
+# in how your requests will be handled — never "all fine". A receipt is the only kind
+# that can say good news, so its word is what the gate checks: systemd/contract.sh
+# refuses a notify_receipt whose verb (title_count) or state (title_state) is not here.
+#
+# CENTRAL ON PURPOSE, unlike NTFY_VERBS. Each entry is an owner's decision that this
+# piece of good news earns a buzz, and the friction of adding one here is the point —
+# a new feature cannot drift loud without someone writing its word into this line.
+#   Skipped Passed   afterimage: your screenshot was read, nothing to propose
+#   Baked            immich: the rotation you made in the UI is now in the file
+#   Downloaded Finished Skipped   liquidroom: your request, halfway and done
+#   Cancelled        calendar feeds: an event you marked went away at its source
+#   Archived         grayjay: a video you were told had failed is now saved
+#   Changed          the model behind your proposals changed (`Model: Changed`)
+NTFY_RECEIPT_VERBS=(Skipped Passed Baked Downloaded Finished Cancelled Archived Changed)
+
 # --- geometry ----------------------------------------------------------------
 # A phone lock screen truncates somewhere around here. The cap exists so WE choose
 # what survives rather than the client: the verb is the word that makes a title

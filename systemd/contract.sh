@@ -241,3 +241,68 @@ workflow_contract() {
     eval "$had_nullglob"
     return 0
 }
+
+# --- the receipt contract ----------------------------------------------------
+# QUIET ON SUCCESS (owner, 2026-10-31). A notification is a failure, a decision waiting
+# for you, the result of something you asked for (including a failure that has since
+# recovered), or a change in how your requests will be handled — never "all fine". The
+# receipt is the one kind that can carry good news, so the gate reads each
+# notify_receipt's word — the verb of a title_count, the state of a title_state — and
+# refuses any that is not in NTFY_RECEIPT_VERBS (ntfy/kinds.sh). A new feature can still
+# send good news; it just cannot do it without someone writing its word into that line.
+#
+# REPO-WIDE, NOT PER PIPELINE. intake_contract runs only over intake-family trees, and
+# most receipts live outside them (grayjay, immich, the calendar feeds, the shared AI
+# layer). Called once, like workflow_contract.
+#
+# A title held in a variable is followed to its NEAREST EARLIER assignment in the same
+# file — grayjay builds `Archived` two ways before one call. A word that is itself a
+# variable cannot be read statically and is refused: write the receipt arms with
+# literal words, as liquidroom's per-verb loop now does.
+receipt_contract() {
+    local dir="$1" rel f code line fn a1 a2 word var
+    local re_ctor='(title_count|title_state)[[:space:]]+("[^"]*"|[^[:space:])]+)([[:space:]]+("[^"]*"|[^[:space:])]+))?'
+    local re_assign="([A-Za-z_][A-Za-z0-9_]*)=\"?\\\$\\(${re_ctor}"
+    local re_inline="notify_receipt[[:space:]]+\"?\\\$\\(${re_ctor}"
+    local re_var='notify_receipt[[:space:]]+"?\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?'
+    local files
+    files="$(git -C "$dir" ls-files '*.sh' 2>/dev/null)" || files=""
+    [[ -n "$files" ]] || files="$(cd "$dir" && find . -name '*.sh' -not -path './.git/*' | sed 's|^\./||')"
+    while IFS= read -r rel; do
+        [[ -n "$rel" ]] || continue
+        case "$rel" in ntfy/*|*/tests/*|systemd/contract.sh) continue ;; esac
+        f="${dir}/${rel}"
+        [[ -f "$f" ]] && grep -q 'notify_receipt' "$f" || continue
+        # Same normalisation as intake_contract: comments off FIRST, then continuations
+        # joined, so a receipt wrapped across lines is still one command.
+        code="$(sed 's/#.*//' "$f" | sed -e ':j' -e '/\\$/ { N; s/\\\n[[:space:]]*/ /; bj }')"
+        local -A last=()
+        while IFS= read -r line; do
+            if [[ "$line" =~ $re_assign ]]; then
+                last[${BASH_REMATCH[1]}]="${BASH_REMATCH[2]}|${BASH_REMATCH[3]}|${BASH_REMATCH[5]}"
+            fi
+            fn="" a1="" a2=""
+            if [[ "$line" =~ $re_inline ]]; then
+                fn="${BASH_REMATCH[1]}" a1="${BASH_REMATCH[2]}" a2="${BASH_REMATCH[4]}"
+            elif [[ "$line" =~ $re_var ]]; then
+                var="${BASH_REMATCH[1]}"
+                if [[ -z "${last[$var]:-}" ]]; then
+                    err "${rel}: notify_receipt \$${var} — no title_count/title_state assignment of ${var} precedes it, so the receipt's word cannot be checked."
+                    continue
+                fi
+                IFS='|' read -r fn a1 a2 <<<"${last[$var]}"
+            else
+                continue
+            fi
+            if [[ "$fn" == title_count ]]; then word="$a1"; else word="$a2"; fi
+            word="${word//\"/}"
+            if [[ -z "$word" || "$word" == *'$'* ]]; then
+                err "${rel}: a notify_receipt's word is not a literal (${word:-empty}) — the receipt gate cannot read it. Give each receipt arm a literal word. See ntfy/kinds.sh NTFY_RECEIPT_VERBS."
+            elif ! grep -qxF -- "$word" < <(printf '%s\n' "${NTFY_RECEIPT_VERBS[@]}"); then
+                err "${rel}: a notify_receipt says '${word}', which is not an approved receipt word. Quiet on success: a notification is a failure, a decision, a result you asked for or a change in how your requests are handled — never \"all fine\". If this one earns a buzz, add it to NTFY_RECEIPT_VERBS in ntfy/kinds.sh. See ntfy/MESSAGES.md § 5."
+            fi
+        done <<<"$code"
+        unset last
+    done <<<"$files"
+    return 0
+}

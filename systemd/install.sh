@@ -124,6 +124,7 @@ declare -A SYMLINKS=(
     ["pigeonhole.retry.timer"]="${REPO_DIR}/pigeonhole/systemd/pigeonhole.retry.timer"
     ["ebooks.sweep.timer"]="${REPO_DIR}/ebooks/systemd/ebooks.sweep.timer"
     ["catallenya.heartbeat.timer"]="${REPO_DIR}/systemd/catallenya.heartbeat.timer"
+    ["courier.selftest.timer"]="${REPO_DIR}/ntfy/courier.selftest.timer"
     # liquidroom polls rather than watching, and that is forced: a request is an
     # empty FOLDER now and no .path verb can express emptiness. It REPLACED
     # liquidroom.triage.path on 2026-08-28 — see liquidroom/systemd/liquidroom.triage.timer.
@@ -172,6 +173,7 @@ declare -A SYMLINKS=(
     ["liquidroom.triage.service"]="${REPO_DIR}/liquidroom/systemd/liquidroom.triage.service"
     ["grayjay.archive.service"]="${REPO_DIR}/grayjay/systemd/grayjay.archive.service"
     ["catallenya.heartbeat.service"]="${REPO_DIR}/systemd/catallenya.heartbeat.service"
+    ["courier.selftest.service"]="${REPO_DIR}/ntfy/courier.selftest.service"
 )
 
 # Units that are NOT jobs and therefore inherit no job policy.
@@ -426,6 +428,19 @@ validate_service() {
 
     check_not_reset "$file" "$unit" base $BASE_SETS
 
+    # NO JOB MAY WIRE OnSuccess=, on any class (owner, 2026-10-31; monitor-only before).
+    # Silence is the healthy state: a notification is a failure, a decision, a result
+    # you asked for, or a change in how your requests are handled — never "all fine".
+    # The restic trio were the last holdouts, kept as proof the courier still worked;
+    # courier.selftest.service proves that to healthchecks.io instead, off the phone.
+    #
+    # Not stylistic, and why it lives here rather than in a policy file: an empty
+    # OnSuccess= in a drop-in does NOT reset a [Unit] dependency list (measured: the
+    # declared handler still runs), so no layer can strip one. Refusing at the gate is
+    # the only enforcement available.
+    has_key_anywhere "$file" "OnSuccess" Unit && \
+        err "${unit}: must not declare OnSuccess= — silence is the healthy state, on every class. Proof the courier works goes to healthchecks.io via courier.selftest, never the phone. See ntfy/MESSAGES.md § 5."
+
     # --- class contract ---
     case "$class" in
         scheduled)
@@ -443,12 +458,6 @@ validate_service() {
                 err "${unit}: Class=monitor must not declare Freshness= — a monitor produces nothing but its own completion stamp, so it is implied."
             has_key_anywhere "$file" "TimeoutStartSec" && \
                 err "${unit}: Class=monitor must not set TimeoutStartSec= — the class sets 10min and would discard this."
-            # Not stylistic. An empty OnSuccess= in a drop-in does NOT reset a
-            # [Unit] dependency list (measured: the declared handler still runs),
-            # so the monitor class physically cannot strip one. Refusing here is
-            # the only enforcement available.
-            has_key_anywhere "$file" "OnSuccess" Unit && \
-                err "${unit}: Class=monitor must not declare OnSuccess= — silence is the healthy state, and a drop-in cannot reset a [Unit] dependency list, so this is the only place it can be stopped."
             check_not_reset "$file" "$unit" monitor $MONITOR_SETS
             ;;
         adhoc)
@@ -586,6 +595,10 @@ done
 # and a tag for three days after both were removed from notify() repo-wide. Called
 # once rather than per-unit: it is a property of the repo, not of any job.
 workflow_contract "${REPO_DIR}/.github/workflows"
+
+# Quiet on success, repo-wide: every notify_receipt must carry an approved word. Once,
+# like the workflow check — receipts live outside the intake trees too.
+receipt_contract "${REPO_DIR}"
 
 # The SYMLINKS map is hand-maintained, and a unit that never makes it in is the
 # quietest failure this layout allows: it validates nothing, installs nothing,
@@ -897,6 +910,9 @@ cat > "${SYSTEMD_DIR}/sanoid.service.d/sticker.conf" <<EOF
 OnFailure=system-ntfy@%N.service
 
 [Service]
+# The base policy's recovery hook, which a vendor unit does not inherit: without it a
+# failed snapshot run would leave its courier marker forever and never say it recovered.
+ExecStartPost=-${REPO_DIR}/ntfy/recovered.sh %N
 # Snapshot runs on this single-dataset pool finish in seconds (5,764 clean runs
 # in the 30 days before 2026-08-13); the vendor unit ran at infinity, where a
 # hung run is invisible forever. An hour is enormous headroom yet finite —
@@ -935,6 +951,7 @@ OnFailure=system-ntfy@%N.service
 
 [Service]
 ExecStartPost=-/usr/bin/touch ${STATE_DIR}/sanoid-prune
+ExecStartPost=-${REPO_DIR}/ntfy/recovered.sh %N
 # Prune runs alongside snapshotting every 15 minutes and finishes in seconds;
 # the vendor unit ran at infinity. Sizing reasoning in sanoid's sticker.
 TimeoutStartSec=1h

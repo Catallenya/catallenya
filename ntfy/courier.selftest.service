@@ -1,0 +1,39 @@
+# Class: monitor    (see systemd/policy/20-monitor.conf)
+# Base:             (see systemd/policy/10-base.conf)
+#
+# Inherited and therefore NOT repeated here: OnFailure, Type=oneshot, journal
+# logging, the base hardening, and from the monitor class the read-only sandbox,
+# the 10-minute bound and the writable stamp directory.
+#
+# THE COURIER'S DEAD MAN'S SWITCH (2026-10-31). system-ntfy.sh is the one script every
+# failure in the fleet depends on, it runs only when something fails, and nothing on
+# the box watches it — so a broken courier looked exactly like a healthy day. Until
+# this job existed, restic's daily "Backup: Succeeded" on the phone was the only proof
+# it still worked. This replaces that with the industry pattern: once a day the
+# courier publishes to an unsubscribed topic over the real alert path, and pings a
+# healthchecks.io check only if ntfy accepted it. The alarm is the ping STOPPING,
+# raised from outside the box, so the phone hears nothing on a healthy day.
+#
+# A broken self-test fails loud for the same reason: it stops pinging. That is where
+# the "who watches the watcher" chain ends — at healthchecks.io, whose own failure is
+# the one risk accepted, exactly as host/deadman.service already accepts it.
+#
+# It runs the courier SCRIPT directly rather than starting the system-ntfy@ template:
+# a carrein job cannot start a system unit, and the template is checked by install.sh.
+# What the probe covers is the part that breaks quietly — the script itself, the .env
+# it sources, the tailnet + Caddy path to ntfy, and curl.
+
+[Unit]
+Description=Courier daily self-test (dead man's switch)
+After=network-online.target
+
+[Service]
+User=carrein
+Group=carrein
+ExecStart=/zpool/catallenya/ntfy/system-ntfy.sh --selftest
+
+[X-Catallenya]
+Class=monitor
+# Daily, so 36h allows one missed run before the watchdog speaks — the same margin
+# every other daily monitor uses. healthchecks.io watches it from the other side.
+MaxAge=36h

@@ -137,6 +137,9 @@
 !ntfy/tests/run.sh
 !ntfy/system-ntfy.sh
 !ntfy/system-ntfy@.service
+!ntfy/recovered.sh
+!ntfy/courier.selftest.service
+!ntfy/courier.selftest.timer
 !systemd/contract.sh
 !systemd/heartbeat.sh
 ntfy/.env

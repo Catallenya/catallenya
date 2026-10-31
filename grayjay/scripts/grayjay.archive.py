@@ -389,6 +389,10 @@ def main():
         src = wanted.get(k) or {"url": rec["url"], "alt": rec.get("alt", [])}
         items.append({"key": k, "url": src["url"], "alt": src["alt"], "tags": tags})
 
+    # Whether ArchiveBox was actually asked this run. "ok" is the report's DEFAULT, so on
+    # its own it cannot tell "answered" from "never asked"; the shell closes an open
+    # ArchiveBox fault only on a run that really reached it.
+    report["archivebox_asked"] = bool(items)
     try:
         facts = abx_query(items) if items else {}
     except Unreachable as e:

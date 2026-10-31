@@ -32,6 +32,8 @@ hasnt(){ [[ "$2" != *"$3"* ]] && ok "$1" || bad "$1" "must not contain $3" "$2";
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 export NTFY_DISABLE=1 PYTHONDONTWRITEBYTECODE=1
+# Recovery markers (ntfy.lib.sh fault_open/fault_close) go to scratch, never live state.
+export NTFY_FAULT_DIR="${TMP}/faults"
 export GRAYJAY_BACKUP="${TMP}/config/GrayjayBackup.ezip"
 export GRAYJAY_STATE="${TMP}/state"
 export GRAYJAY_DOCKER="${TMP}/docker"
@@ -171,7 +173,7 @@ PY
 }
 
 fresh() {
-    rm -rf "$GRAYJAY_STATE" "${TMP}/config" "$CAP"
+    rm -rf "$GRAYJAY_STATE" "${TMP}/config" "$CAP" "$NTFY_FAULT_DIR"
     mkdir -p "${TMP}/config" "$CAP"
     : > "${CAP}/titles"; : > "${CAP}/bodies"
     abx_reset
@@ -312,7 +314,9 @@ clear_cap; abx_reset_calls
 mk_backup "$GRAYJAY_BACKUP" "Guitar Licks (renamed):::${GUITAR}" "$(yt aaaaaaaaaaa)" -- "AddisonCore:::${ADDISON}"
 age_backup 1
 run_job
-is "a renamed playlist (same UUID) changes nothing" "$(titles)" ""
+# AddisonCore is back in this backup, so the Missing from the run above recovers in
+# place (the recovery rule); the RENAMED Guitar playlist itself adds nothing.
+is "a renamed playlist (same UUID) changes nothing; the missing one is Found" "$(titles)" "AddisonCore: Found"
 hasnt "...hands nothing over again" "$(calls)" " add "
 
 echo "staleness"
@@ -328,7 +332,8 @@ is "...a finding, not a failure" "$rc" "0"
 clear_cap
 age_backup 7
 run_job
-is "exactly 7 days is not stale yet" "$(titles)" ""
+# Not stale any more, so the 8-day fault above recovers rather than staying silent.
+is "exactly 7 days is not stale yet, so the stale fault recovers" "$(titles)" "Backup: Current"
 
 # ===================================================================== failures
 echo "failure policy"
@@ -598,6 +603,23 @@ abx_unflag down; clear_cap
 run_job; rc=$?
 is "back up: the same videos are handed over, one add per tag set" "$(calls | grep -c ' add ')" "3"
 is "...and the run succeeds" "$rc" "0"
+# The recovery rule (2026-10-31): a fault that heals on its own says so, in place.
+is "...and the fault becomes ArchiveBox: Reachable" "$(titles)" "ArchiveBox: Reachable"
+is "...on the SAME id, so it replaces the fault on the phone" "$(ids)" "grayjay-archivebox"
+clear_cap
+run_job
+is "a second healthy run says nothing more" "$(titles)" ""
+
+echo "the backup recovers"
+fresh
+standard_backup
+age_backup 8
+run_job
+is "a stale backup: Backup: 8 Days Old" "$(titles)" "Backup: 8 Days Old"
+age_backup 1; clear_cap
+run_job
+is "a fresh one arrives: Backup: Current" "$(titles)" "Backup: Current"
+is "...on the backup's id" "$(ids)" "grayjay-backup"
 
 fresh
 standard_backup

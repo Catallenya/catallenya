@@ -24,6 +24,45 @@ NTFY_URL="https://${TAILNET_DOMAIN}.${TAILNET_DNS_NAME}:${NTFY_REVERSE_PROXY_POR
 
 service_name="$1"
 
+# --- the daily self-test (courier.selftest.service) --------------------------
+#
+# NOTHING ELSE WATCHES THIS SCRIPT, and on a healthy day nothing runs it: it is
+# started only when a job fails, and since 2026-10-31 no unit wires OnSuccess=
+# here. A broken courier and a healthy box are therefore identical from the phone —
+# both are silence. Until that date restic's daily "Backup: Succeeded" was the only
+# proof this path worked, which cost a notification every morning to say nothing.
+#
+# The industry answer is a dead man's switch, and that is what this is: once a day
+# the courier publishes to a topic nobody subscribes to, over the same URL and the
+# same curl as a real alert, and only if ntfy accepted it does it ping a
+# healthchecks.io check. Silence there is the alarm, so a broken courier — or a
+# broken self-test — reaches the owner from OUTSIDE the box, and a healthy day
+# reaches the phone not at all.
+#
+# Cache: no and Firebase: no keep the canary off the server's cache and out of
+# Google's push relay. It still proves the publish was accepted, which is the
+# question.
+#
+# The ping URL is a SECRET for the same reason as the dead-man switch's: anyone
+# holding it could keep the check green while this path is dead.
+if [[ "$service_name" == "--selftest" ]]; then
+    if [[ -z "${HEALTHCHECKS_COURIER_PING_URL:-}" ]]; then
+        # Not armed must not look healthy — same rule as host/deadman.sh.
+        echo "system-ntfy: HEALTHCHECKS_COURIER_PING_URL is not set in ${ROOT_ENV} — the courier self-test is not armed" >&2
+        exit 1
+    fi
+    if [[ "${NTFY_DISABLE:-}" == "1" ]]; then
+        echo "system-ntfy: NTFY_DISABLE=1, not publishing (self-test -> courier-canary)"
+        exit 0
+    fi
+    curl -fsS --max-time 15 -o /dev/null \
+         -H "Title: Courier: Tested" -H "Cache: no" -H "Firebase: no" \
+         --data-raw "Daily courier self-test. Nothing is subscribed to this topic." \
+         "${NTFY_URL}/courier-canary"
+    curl -fsS --max-time 15 --retry 2 --retry-delay 5 -o /dev/null "$HEALTHCHECKS_COURIER_PING_URL"
+    exit 0
+fi
+
 # Split "<topic>.<job>" — the unit naming convention already carries the topic, so
 # restic.backup -> restic/Backup, afterimage.triage -> afterimage/Triage. This used to
 # match restic and nothing else, while FOUR units wired OnFailure= here through the
@@ -133,13 +172,11 @@ fi
 # systemd/contract.sh checks this file by PATTERN rather than by constructor. See
 # ntfy/MESSAGES.md § 5, nuance 12.
 #
-# THE SUCCESS BRANCH IS NOT DEAD CODE AND MUST NOT BE DELETED. Three units wire
-# OnSuccess= here — restic.backup, restic.forget and restic.check@ — and those pings
-# are the ONLY positive evidence that this path still reaches the phone. Nothing
-# watches the courier: it inherits no OnFailure= (that would call the courier to
-# complain about the courier) and carries no [X-Catallenya] Class, so the watchdog
-# skips it too. Only the DAILY backup ping is frequent enough to serve as that canary;
-# weekly, monthly and yearly are not. See ntfy/MESSAGES.md § 5, nuance 13.
+# NO UNIT WIRES OnSuccess= HERE ANY MORE (2026-10-31), and install.sh refuses one on
+# every class. The restic trio used to, as the only proof this path still reached the
+# phone; the daily self-test above replaced that, off the phone. The `Succeeded` arm
+# below survives only for a courier started by hand against a unit that did not fail.
+# See ntfy/MESSAGES.md § 5, nuance 13.
 # NO TAG AND NO PRIORITY, matching the shared transport by hand — which is the price
 # of this file's exemption from it. Both were dropped repo-wide on 2026-08-20: priority
 # had one legal value, and tags were twelve glyphs of which four meant "something is
@@ -165,12 +202,11 @@ fi
 # matters: systemd REFUSES to populate these when a handler has more than one trigger
 # source, logging "multiple trigger source candidates for exit status propagation,
 # skipping" — and it counts OnSuccess= and OnFailure= pointing at the SAME instance as
-# two. So the three restic jobs, which wire both, get nothing here.
+# two. The restic trio wired both until 2026-10-31 and got nothing here; with
+# OnSuccess= now refused everywhere, every handler has one trigger source.
 #
-# That is why the fallback stays rather than being an embarrassment: MONITOR_* covers
-# every OnFailure-only job, which is every job that can hot-loop, while the restic trio
-# that falls through is timer-driven and cannot re-trigger itself — so is-failed is
-# reliable for precisely the units left using it.
+# The fallback stays for a courier started by hand (no MONITOR_* at all), where
+# is-failed is the only answer available.
 outcome=""
 case "${MONITOR_SERVICE_RESULT:-}" in
     success)  outcome="Succeeded" ;;
@@ -240,6 +276,32 @@ fi
 # this file) the old status dump is still better than nothing.
 [[ -n "${message//[[:space:]]/}" ]] || message=$(systemctl status "${service_name}.service" || true)
 
+# THE SEQUENCE ID AND THE MARKER are what let the job say it has recovered
+# (2026-10-31). A failure carries `unit-<name>` as its ntfy sequence id, so a second
+# failure of the same unit replaces the first, and ntfy/recovered.sh — run by the base
+# policy after every SUCCESSFUL run — finds the marker left here and publishes
+# "<Job>: Recovered" on the same id, turning this notification into that one. The
+# marker records the topic and subject actually used, so the recovery lands where the
+# failure did, routed note and all. Written by hand rather than through fault_open()
+# for the reason at the top of this file. A marker that cannot be written costs the
+# recovery message, never this alert.
+seq_id="unit-$(tr -cd 'A-Za-z0-9._-' <<<"$service_name" | sed 's/^\.*//')"
+# A muted run with no NTFY_FAULT_DIR seam touches no marker, so the suites can drive
+# the real courier without leaving a live one behind.
+fault_dir="${NTFY_FAULT_DIR:-}"
+[[ -n "$fault_dir" || "${NTFY_DISABLE:-}" == "1" ]] || fault_dir="/zpool/catallenya/systemd/state/.faults"
+if [[ "$outcome" == "Failed" && -n "$fault_dir" ]]; then
+    # Keep the FIRST failure's time across repeats, so the recovery says when the
+    # trouble started rather than when it last happened.
+    since=""
+    { read -r since; } 2>/dev/null < "${fault_dir}/${seq_id}" || true
+    [[ "$since" =~ ^[0-9]+$ ]] || since="$(date +%s)"
+    { mkdir -p "$fault_dir" &&
+      printf '%s\n%s\n%s\n%s\n' "$since" "$topic" "$job_type" "$routed_note" \
+          > "${fault_dir}/${seq_id}"; } 2>/dev/null || true
+fi
+
+
 # Same guard the intake libs and the heartbeat carry, placed immediately before
 # the curl so everything up to the wire — ownership, topic routing, title and
 # status derivation — is exercised by the offline suite without pinging the phone.
@@ -266,5 +328,6 @@ fi
 # into reading a file.
 curl -f --max-time 15 \
      -H "Title: $title" \
+     -H "X-Sequence-ID: $seq_id" \
      --data-raw "$message" \
      "${NTFY_URL}/${topic}"

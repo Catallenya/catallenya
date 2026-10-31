@@ -1,0 +1,15 @@
+[Unit]
+Description=Courier daily self-test
+
+[Timer]
+# THE SAME SCHEDULE IS TYPED INTO healthchecks.io, and nothing can check they agree —
+# the same weak joint host/deadman.timer documents. Enter it there as the OnCalendar
+# expression `*-*-* 08:30:00` with timezone Asia/Singapore and a 2-hour grace. Change
+# one without the other and the check either alarms on a healthy day or takes longer
+# to be true than it looks.
+OnCalendar=*-*-* 08:30:00 Asia/Singapore
+# One minute, not the fleet's usual five-to-ten, for host/deadman.timer's reason: the
+# far side watches the clock against the identical expression, so jitter reads as
+# lateness there. The gate requires some, and a single HTTPS publish plus a GET
+# contends with nothing.
+RandomizedDelaySec=1min

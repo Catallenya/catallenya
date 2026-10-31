@@ -17,7 +17,16 @@ User=root
 # Root is allowed here; UNBOUNDED root is not. A scrub needs exactly one
 # capability, so the other ~40 are dropped. This is the base policy's rule for any
 # job that must run as root.
-CapabilityBoundingSet=CAP_SYS_ADMIN
+#
+# CAP_DAC_OVERRIDE is the second, added 2026-10-31 for the same reason smart.service
+# carries it. Root's power over file permissions IS that capability; bounded without
+# it, root is an ordinary user against carrein's state directory, so the base policy's
+# two success hooks — the completion stamp and the recovery note in state/.faults —
+# failed silently (both are `-` prefixed). The stamp never mattered here (the watchdog
+# reads `zfs-scrub:` instead), but a scrub request that failed once would then never
+# say it had recovered. It widens nothing that matters: CAP_SYS_ADMIN is already far
+# broader than reading a file.
+CapabilityBoundingSet=CAP_SYS_ADMIN CAP_DAC_OVERRIDE
 
 # `zpool scrub` only REQUESTS a scrub and returns in about a second — the scrub
 # itself then runs for ~2.5h inside ZFS, entirely outside this unit's lifetime.

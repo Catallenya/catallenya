@@ -505,5 +505,108 @@ has "a known topic is used directly" "$out" "-> restic"
 out="$(MONITOR_SERVICE_RESULT=exit-code courier notatopic.job)"
 has "an unknown topic is REROUTED, never dropped" "$out" "-> host"
 
+echo "  quiet on success: failures carry an id and leave a recovery marker"
+FD="${CT}/faults"; rm -rf "$FD"
+out="$(MONITOR_SERVICE_RESULT=exit-code NTFY_FAULT_DIR="$FD" courier restic.backup)"
+has "a failure still publishes" "$out" "Backup: Failed -> restic"
+m="${FD}/unit-restic.backup"
+[[ -f "$m" ]] && ok "a failure leaves unit-<name> for recovered.sh" || bad "a failure leaves unit-<name> for recovered.sh" "$m" "absent"
+is "the marker records the topic used"   "$(sed -n 2p "$m" 2>/dev/null)" "restic"
+is "and the subject used"                "$(sed -n 3p "$m" 2>/dev/null)" "Backup"
+rm -rf "$FD"
+out="$(MONITOR_SERVICE_RESULT=success NTFY_FAULT_DIR="$FD" courier restic.backup)"
+[[ ! -e "${FD}/unit-restic.backup" ]] && ok "a success leaves no marker" || bad "a success leaves no marker" "absent" "present"
+out="$(MONITOR_SERVICE_RESULT=exit-code courier restic.backup)"
+[[ ! -e "/zpool/catallenya/systemd/state/.faults/unit-restic.backup" || -n "${CI_KEEP_LIVE:-}" ]] \
+    && ok "a muted run with no seam writes no live marker" \
+    || bad "a muted run with no seam writes no live marker" "absent" "present in live state"
+
+echo "  the daily self-test"
+out="$(HEALTHCHECKS_COURIER_PING_URL=https://hc.invalid/x courier --selftest)"
+has "publishes to the unsubscribed canary topic" "$out" "self-test -> courier-canary"
+hasnt "and is never a job alert" "$out" "Failed"
+
+# ======================================================== fault lifecycle
+# fault_open / fault_close (ntfy.lib.sh): a repeating fault that clears on its own
+# turns its message into the recovery, in place, on the same sequence id. notify is
+# overridden in a subshell so what WOULD be published can be read back.
+echo
+echo "fault lifecycle"
+FL="$(mktemp -d)"
+lifecycle() {  # runs "$@" with the marker seam and a recording notify
+    # The recording goes to a FILE, not stdout: the real notify is silent on success,
+    # and fault_close reads any output as an undelivered publish.
+    : > "${FL}.pub"
+    ( NTFY_FAULT_DIR="$FL" NTFY_TOPIC=grayjay
+      notify() { printf 'PUBLISH title=%s id=%s body=%s\n' "$1" "${4:-}" "${2//$'\n'/|}" >> "${FL}.pub"; }
+      "$@" )
+    cat "${FL}.pub"
+}
+out="$(lifecycle fault_open grayjay-archivebox "ArchiveBox: Unreachable" "b")"
+has "fault_open publishes the fault on its stable id" "$out" "title=ArchiveBox: Unreachable id=grayjay-archivebox"
+[[ -f "${FL}/grayjay.grayjay-archivebox" ]] && ok "and leaves a marker keyed on topic + id" \
+    || bad "and leaves a marker keyed on topic + id" "${FL}/grayjay.grayjay-archivebox" "absent"
+out="$(lifecycle fault_close grayjay-archivebox Reachable "Handed over again.")"
+has "fault_close publishes the recovery on the SAME id" "$out" "title=ArchiveBox: Reachable id=grayjay-archivebox"
+has "saying when it was first reported" "$out" "First reported"
+has "with the caller's sentence" "$out" "Handed over again."
+[[ ! -e "${FL}/grayjay.grayjay-archivebox" ]] && ok "and removes the marker" || bad "and removes the marker" "absent" "present"
+out="$(lifecycle fault_close grayjay-archivebox Reachable)"
+is "a second clean run says nothing" "$out" ""
+out="$(lifecycle fault_close never-opened Reachable)"
+is "nothing was reported, nothing to recover" "$out" ""
+lifecycle fault_open containers "Containers: 3 Findings" "b" >/dev/null
+out="$(lifecycle fault_close containers Running)"
+has "a count title recovers under its subject" "$out" "title=Containers: Running"
+# The four audit fixes (2026-10-31).
+printf '%s\n%s\n' 1000 "ArchiveBox: Unreachable" > "${FL}/grayjay.ab"
+lifecycle fault_open ab "ArchiveBox: Unreachable" "b" >/dev/null
+is "a repeating fault keeps its FIRST timestamp" "$(head -1 "${FL}/grayjay.ab")" "1000"
+# shellcheck disable=SC2034  # read by fault_close / _fault_marker inside this subshell
+out="$( NTFY_FAULT_DIR="$FL" NTFY_TOPIC=grayjay
+        notify() { echo "curl: (22) The requested URL returned error: 502" >&2; }
+        fault_close ab Reachable 2>&1 )"
+has "an undelivered recovery speaks, so the reporter fails its unit" "$out" "502"
+[[ -f "${FL}/grayjay.ab" ]] && ok "…and puts the marker back for the next clean run" \
+    || bad "…and puts the marker back for the next clean run" "present" "absent"
+is "…with the original time intact" "$(head -1 "${FL}/grayjay.ab" 2>/dev/null)" "1000"
+rm -f "${FL}/grayjay.ab"
+lifecycle fault_open shop "Shop: Item: Broken" "b" >/dev/null
+out="$(lifecycle fault_close shop Working)"
+has "a subject containing ': ' survives into the recovery" "$out" "title=Shop: Item: Working"
+mkdir -p "${FL}/ro"; lifecycle fault_open lock "Lock: Broken" "b" >/dev/null
+mv "${FL}/grayjay.lock" "${FL}/ro/grayjay.lock"; chmod 500 "${FL}/ro"
+# shellcheck disable=SC2034  # read by fault_close / _fault_marker inside this subshell
+out="$( NTFY_FAULT_DIR="${FL}/ro" NTFY_TOPIC=grayjay
+        notify() { echo PUBLISHED >> "${FL}.pub"; }
+        : > "${FL}.pub"; fault_close lock Fixed 2>&1; cat "${FL}.pub" )"
+is "a marker it cannot delete is never announced (no every-run repeat)" "$out" ""
+chmod 700 "${FL}/ro"
+# shellcheck disable=SC2034  # read by fault_close / _fault_marker inside this subshell
+out="$( NTFY_TOPIC=grayjay; unset NTFY_FAULT_DIR; _fault_marker x || echo refused )"
+is "a muted run with no seam refuses to name a live marker" "$out" "refused"
+rm -rf "$FL"
+
+# ======================================================== recovered.sh
+# Runs after every successful job (10-base.conf ExecStartPost). The common case is no
+# marker, which must cost nothing and print nothing.
+echo
+echo "recovered.sh"
+RD="$(mktemp -d)"
+out="$(NTFY_FAULT_DIR="$RD" bash "${SELF_DIR}/../recovered.sh" restic.backup 2>&1; echo "rc=$?")"
+is "no marker: silent, exit 0" "$out" "rc=0"
+printf '%s\n%s\n%s\n%s\n' "$(date +%s)" restic Backup "" > "${RD}/unit-restic.backup"
+NTFY_FAULT_DIR="$RD" bash "${SELF_DIR}/../recovered.sh" restic.backup >/dev/null 2>&1; rc=$?
+is "with a marker it still exits 0" "rc=$rc" "rc=0"
+[[ ! -e "${RD}/unit-restic.backup" ]] && ok "and consumes the marker" || bad "and consumes the marker" "absent" "present"
+out="$(bash "${SELF_DIR}/../recovered.sh" restic.backup 2>&1; echo "rc=$?")"
+is "a muted run with no seam touches nothing" "$out" "rc=0"
+mkdir -p "${RD}/ro"; printf '%s\n%s\n%s\n%s\n' 1 restic Backup "" > "${RD}/ro/unit-restic.backup"; chmod 500 "${RD}/ro"
+out="$(NTFY_FAULT_DIR="${RD}/ro" bash "${SELF_DIR}/../recovered.sh" restic.backup 2>&1; echo "rc=$?")"
+has "a marker it cannot delete is not announced" "$out" "not announcing"
+has "…and the job still succeeds" "$out" "rc=0"
+chmod 700 "${RD}/ro"
+rm -rf "$RD"
+
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 (( FAIL == 0 ))

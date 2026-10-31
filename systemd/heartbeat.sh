@@ -423,6 +423,14 @@ echo "heartbeat: checked ${CHECKED} job(s), ${#FINDINGS[@]} finding(s)"
 
 if (( ${#FINDINGS[@]} == 0 )); then
     echo "heartbeat: all clear"
+    # Findings the next run resolved — a late job that ran, a unit that recovered —
+    # turn yesterday's "Watchdog: N Findings" into "Watchdog: All Clear" in place
+    # (ntfy.lib.sh fault_close, the recovery rule). No marker, no message.
+    send_out="$(fault_close "$WATCHDOG_NTFY_ID" "All Clear" "Every job checked in on time." 2>&1)"
+    if [[ -n "$send_out" ]]; then
+        echo "heartbeat: ntfy publish FAILED — the all-clear was not delivered: ${send_out}" >&2
+        exit 1
+    fi
     exit 0
 fi
 
@@ -463,7 +471,7 @@ fi
 # the state carries the count, which is the fact you previously had to open the
 # notification to learn.
 n_find=${#FINDINGS[@]}
-send_out="$(notify_fault "$(title_state Watchdog "${n_find} Finding$( (( n_find == 1 )) || printf s )")" "$BODY" "$WATCHDOG_NTFY_ID" 2>&1)"
+send_out="$(fault_open "$WATCHDOG_NTFY_ID" "$(title_state Watchdog "${n_find} Finding$( (( n_find == 1 )) || printf s )")" "$BODY" 2>&1)"
 if [[ -n "$send_out" ]]; then
     echo "heartbeat: ntfy publish FAILED — ${#FINDINGS[@]} finding(s) undelivered: ${send_out}" >&2
     exit 1

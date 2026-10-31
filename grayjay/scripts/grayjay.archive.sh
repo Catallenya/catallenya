@@ -73,21 +73,38 @@ publish() { # $1 = path to the JSON report
         notify_fault "$title" "$body" 2>>"$SEND_ERR"
     fi
 
+    # The three repeating faults below go through fault_open / fault_close (ntfy.lib.sh):
+    # each run says whether the fault is present or absent, and one that clears on its
+    # own — ArchiveBox back, a fresh backup, a playlist found again — turns its message
+    # on the phone into the recovery, the same loop the per-video `Archived` closes.
+    # A fault is only CLOSED when this run could actually see the thing: an unreadable
+    # backup says nothing about playlists, so it closes no Missing.
+    local backup_state; backup_state="$(jq -r '.backup.state' "$r")"
+
     # --- an allow-listed playlist is not in the backup -----------------------------
-    local tag uuid
+    local tag uuid entry
+    declare -A missing_now=()
     while IFS=$'\t' read -r tag uuid; do
         [[ -n "$tag" ]] || continue
+        missing_now[$tag]=1
         title="$(title_state "$tag" Missing)"
         body="Playlist ${uuid} is not in the latest backup. If it was deleted and made again, put its new id in grayjay/scripts/grayjay.lib.sh."
-        notify_fault "$title" "$body" "${MISSING_NTFY_PREFIX}${tag}" 2>>"$SEND_ERR"
+        fault_open "${MISSING_NTFY_PREFIX}${tag}" "$title" "$body" 2>>"$SEND_ERR"
     done < <(jq -r '.missing[] | [.tag, .uuid] | @tsv' "$r")
+    if [[ "$backup_state" != "unreadable" ]]; then
+        for entry in "${PLAYLISTS[@]}"; do
+            tag="${entry#*=}"
+            [[ -n "${missing_now[$tag]:-}" ]] || \
+                fault_close "${MISSING_NTFY_PREFIX}${tag}" Found "The playlist is in the latest backup again." 2>>"$SEND_ERR"
+        done
+    fi
 
     # --- the backup itself: unreadable, or too old ---------------------------------
     local newest age last=""
     newest="$(jq -r '.backup.newest // empty' "$r")"
     age="$(jq -r '.backup.age_days // empty' "$r")"
     [[ -n "$newest" ]] && last="Last backup $(sgt "$newest")"
-    if [[ "$(jq -r '.backup.state' "$r")" == "unreadable" ]]; then
+    if [[ "$backup_state" == "unreadable" ]]; then
         title="$(title_state Backup Unreadable)"
         if [[ -z "$newest" ]]; then
             body="No backup file exists in master/config. Grayjay may have stopped writing one, or written it somewhere else."
@@ -95,11 +112,13 @@ publish() { # $1 = path to the JSON report
             body="$(body_join "$(body_fact "$last")" \
                 "Neither GrayjayBackup.ezip nor its .old copy could be opened. The backup format may have changed.")"
         fi
-        notify_fault "$title" "$body" "$BACKUP_NTFY_ID" 2>>"$SEND_ERR"
+        fault_open "$BACKUP_NTFY_ID" "$title" "$body" 2>>"$SEND_ERR"
     elif [[ "$(jq -r '.backup.stale' "$r")" == "true" ]]; then
         title="$(title_state Backup "${age} Days Old")"
         body="$(body_join "$(body_fact "$last")" "Open Grayjay on the phone to trigger one.")"
-        notify_fault "$title" "$body" "$BACKUP_NTFY_ID" 2>>"$SEND_ERR"
+        fault_open "$BACKUP_NTFY_ID" "$title" "$body" 2>>"$SEND_ERR"
+    else
+        fault_close "$BACKUP_NTFY_ID" Current "A fresh backup has arrived and opens." 2>>"$SEND_ERR"
     fi
 
     # --- ArchiveBox could not be asked, or refused the hand-over --------------------
@@ -110,7 +129,9 @@ publish() { # $1 = path to the JSON report
         title="$(title_state ArchiveBox Unreachable)"
         body="$(body_join "$(body_fact "$err")" \
             "$( (( waiting > 0 )) && printf '%s new videos were not handed over. ' "$waiting")Everything is tried again tomorrow.")"
-        notify_fault "$title" "$body" "$ARCHIVEBOX_NTFY_ID" 2>>"$SEND_ERR"
+        fault_open "$ARCHIVEBOX_NTFY_ID" "$title" "$body" 2>>"$SEND_ERR"
+    elif [[ "$(jq -r '.archivebox' "$r")" == "ok" && "$(jq -r '.archivebox_asked // false' "$r")" == "true" ]]; then
+        fault_close "$ARCHIVEBOX_NTFY_ID" Reachable "Everything that was waiting is handed over again." 2>>"$SEND_ERR"
     fi
 
     if [[ -s "$SEND_ERR" ]]; then

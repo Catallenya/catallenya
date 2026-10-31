@@ -4,7 +4,6 @@
 
 [Unit]
 Description=Restic Forget
-OnSuccess=system-ntfy@restic.forget.service
 
 [Service]
 User=carrein

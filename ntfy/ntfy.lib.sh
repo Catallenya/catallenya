@@ -337,3 +337,88 @@ paused_sync() {
     notify "$(paused_title "${#items[@]}" "$noun" "$cause")" \
         "$(paused_body "$reason" "$outcome" "${items[@]}")" "" "$id"
 }
+
+# --- fault lifecycle: a fault that heals itself says so ---------------------
+# THE RECOVERY RULE (owner, 2026-10-31). A failure you were told about that then
+# heals WITHOUT you announces that it has. grayjay set the precedent with a video
+# that is Dropped and later saves; this is the same idea for every repeating fault
+# that can clear on its own — ArchiveBox coming back, a container restarting, a
+# watch whose site returns, a watchdog finding that the next run resolves.
+#
+# Built ONCE, here, rather than as six memories in six scripts — the same move
+# paused_sync made for the paused summary. The key is the stable sequence id each
+# of those faults already carried so a repeat replaces rather than stacks: the id
+# already IS the fault's name, so nothing new had to be invented to identify one.
+#
+#   fault_open  <id> <title> <body>     the fault is present this run
+#   fault_close <id> <state> [prose]    the fault is absent this run
+#
+# A caller asks one of the two on EVERY run. fault_open publishes exactly as
+# notify_fault does and leaves a marker; fault_close is a no-op without a marker,
+# and with one it publishes the recovery on the SAME sequence id — so on the phone
+# "ArchiveBox: Unreachable" turns into "ArchiveBox: Reachable" in place — and
+# removes the marker. The recovery title reuses the fault's own subject, so the two
+# can never disagree about what they are talking about.
+#
+# THE WITHDRAWAL RULE IS UNTOUCHED. Nothing is deleted: the fault is overwritten by
+# a message that says what happened, which is unambiguous in a way an absence is not.
+#
+# BOTH STAY OUTPUT-TRANSPARENT, like notify_fault. The reporters capture this output
+# and treat any of it as an undelivered alert, so the marker bookkeeping prints
+# nothing; a marker that cannot be written costs that fault its recovery message,
+# never its alert.
+#
+# NTFY_FAULT_DIR is the test seam. A muted run (NTFY_DISABLE=1) with no seam set
+# touches no marker at all: the suites run the REAL scripts, and a suite that
+# exercised a fault must not leave a live marker that makes production announce a
+# recovery from something that never happened.
+_fault_marker() {
+    local dir="${NTFY_FAULT_DIR:-}"
+    if [[ -z "$dir" ]]; then
+        ntfy_muted && return 1
+        dir="/zpool/catallenya/systemd/state/.faults"
+    fi
+    local id; id="$(ntfy_id_safe "$1")"
+    [[ -n "$id" && -n "${NTFY_TOPIC:-}" ]] || return 1
+    printf '%s/%s.%s' "$dir" "$(ntfy_id_safe "$NTFY_TOPIC")" "$id"
+}
+
+fault_open() {
+    local id="${1:?fault_open: sequence-id}" m since=""
+    if m="$(_fault_marker "$id")"; then
+        # KEEP THE FIRST TIME. An hourly reporter re-opens a lasting fault every run, and
+        # rewriting the stamp would make a 30-hour outage recover as "first reported" an
+        # hour ago. The title is refreshed — the newest wording is the one to recover from.
+        { read -r since; } 2>/dev/null < "$m" || true
+        [[ "$since" =~ ^[0-9]+$ ]] || since="$(date +%s)"
+        { mkdir -p "$(dirname "$m")" && printf '%s\n%s\n' "$since" "$2" > "$m"; } 2>/dev/null || true
+    fi
+    notify_fault "${2:?fault_open: title}" "${3:?fault_open: body}" "$id"
+}
+
+fault_close() {
+    local id="${1:?fault_close: sequence-id}" state="${2:?fault_close: state}" m
+    m="$(_fault_marker "$id")" || return 0
+    [[ -f "$m" ]] || return 0
+    local since="" title="" saved out
+    # 2>/dev/null before the input redirection, or an unreadable marker makes bash print
+    # an error — and the reporters read ANY output as an undelivered alert.
+    saved="$(cat "$m" 2>/dev/null)" || true
+    { read -r since; read -r title; } 2>/dev/null < "$m" || true
+    # The delete gates the publish: a marker this process can read but not remove would
+    # otherwise announce the recovery on every run, forever.
+    if ! rm -f "$m" 2>/dev/null || [[ -e "$m" ]]; then return 0; fi
+    [[ "$since" =~ ^[0-9]+$ ]] || since="$(date +%s)"
+    # `%`, not `%%`: the subject is everything before the LAST ": ", so a watch named
+    # "Shop: Item" recovers as "Shop: Item: Working" rather than "Shop: Working".
+    out="$(notify "$(title_state "${title%: *}" "$state")" \
+        "$(body_join "$(body_fact "First reported $(TZ=Asia/Singapore date -d "@${since}" '+%a %-d %b, %H:%M')")" "${3:-}")" \
+        "" "$id" 2>&1)"
+    if [[ -n "$out" ]]; then
+        # Not delivered: put the marker back so the next clean run tries again, and pass
+        # the transport's words through so the reporter fails its unit as for any alert.
+        printf '%s\n' "$saved" > "$m" 2>/dev/null || true
+        printf '%s\n' "$out" >&2
+    fi
+    return 0
+}

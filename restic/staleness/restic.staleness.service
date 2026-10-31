@@ -5,11 +5,11 @@
 # Inherited and therefore NOT repeated here: OnFailure, Type, journal logging, the
 # base hardening, network-online ordering, RCLONE_CONFIG, and from the monitor
 # class the read-only sandbox, the 10-minute bound (this unit ran at `infinity`),
-# the writable stamp directory, and the OnSuccess= reset.
+# the writable stamp directory, and the refusal of OnSuccess=.
 #
 # That reset is what this unit used to say for itself: no success ping, because a
 # daily "backups are fine" is noise you learn to swipe away, and an alarm nobody
-# reads is not an alarm. The class now guarantees it for every monitor.
+# reads is not an alarm. install.sh now refuses OnSuccess= on every class.
 #
 # This job stays separate from the heartbeat deliberately. It is not a freshness
 # check that happens to hit the network — it is an END-TO-END PROBE that proves

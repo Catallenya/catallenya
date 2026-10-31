@@ -16,7 +16,6 @@
 
 [Unit]
 Description=Restic Check %i
-OnSuccess=system-ntfy@restic.check@%i.service
 
 [Service]
 User=carrein
