@@ -411,6 +411,14 @@ The same rule for **any job the courier reports**: a failure goes out under
 `ExecStartPost=` after every successful run — publishes `<Job>: Recovered` over it. No job
 carries a line of its own for this.
 
+**Known limit, accepted (2026-10-31 audit): "Recovered" means the next run SUCCEEDED, not
+that it re-tested what failed.** For most jobs those are the same thing. For a poller that
+often has nothing to do — `liquidroom.triage` every five minutes, pigeonhole's 03:00
+backstop — an empty run exits 0, so a request-driven failure can be followed minutes later
+by `Triage: Recovered` with nothing retried. The body says exactly that ("The next run
+succeeded"), the failure note left in the folder still says what failed, and special-casing
+pollers in the generic hook was judged worse than the rare honest-but-early message.
+
 ### The withdrawal rule
 
 > **A notification with buttons may be withdrawn. A notification without buttons is
@@ -964,6 +972,11 @@ it refuses reached `main` green:
     outside them. A title variable is followed to its nearest earlier assignment; a word
     that is itself a variable is refused, because nothing static can read it.
     Alongside it, `install.sh` refuses `OnSuccess=` on every class.
+    **Two shapes it cannot see, accepted (2026-10-31 audit):** a wrapper that forwards a
+    positional title (`send() { notify_receipt "$1" …; }`), and a title variable
+    reassigned to a plain string after a constructor assignment (it is judged on the
+    stale constructor word). Nothing in the repo writes either; hardening the parse was
+    judged not worth its complexity. Write receipts inline and this cannot bite.
 
 Rules 1–3 are about the title, 4–6 about the envelope, 7–8 about the body, 11 about
 what is allowed to be good news.

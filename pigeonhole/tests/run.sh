@@ -44,6 +44,14 @@ export DOCS="${TMP}/docs" STATE_DIR="${TMP}/state"
 # every notification they raised — dozens of "Refused: 1 Document" pings — on the
 # live `pigeonhole` topic. The files were always scratch; the notifications were not.
 export NTFY_DISABLE=1
+# ...nor the real API, nor the live model memory. The triage resolves its model with a
+# GET to MODELS_URL before every run, and the messages sink below only replaced
+# API_URL — so until 2026-10-31 every triage here asked api.anthropic.com for its model
+# list (with the fake key `sink`, refused), and each 200 from the sink rewrote the LIVE
+# systemd/state/.ai-model. A dead local port makes the lookup fail fast and offline, and
+# the resolver then falls back to the remembered model exactly as it does in an outage.
+export MODELS_URL="http://127.0.0.1:9/v1/models"
+export AI_MODEL_STATE="${TMP}/ai-model" AI_MODEL_REJECTED_STATE="${TMP}/ai-model-rejected"
 # shellcheck source=../scripts/pigeonhole.lib.sh
 source "${SCRIPT_DIR}/pigeonhole.lib.sh"
 
