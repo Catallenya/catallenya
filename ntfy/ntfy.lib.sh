@@ -414,9 +414,10 @@ fault_close() {
     out="$(notify "$(title_state "${title%: *}" "$state")" \
         "$(body_join "$(body_fact "First reported $(TZ=Asia/Singapore date -d "@${since}" '+%a %-d %b, %H:%M')")" "${3:-}")" \
         "" "$id" 2>&1)"
-    if [[ -n "$out" ]]; then
+    if [[ -n "$out" ]] && ! ntfy_muted; then
         # Not delivered: put the marker back so the next clean run tries again, and pass
         # the transport's words through so the reporter fails its unit as for any alert.
+        # A muted run has nothing to deliver and counts as delivered, as in recovered.sh.
         printf '%s\n' "$saved" > "$m" 2>/dev/null || true
         printf '%s\n' "$out" >&2
     fi

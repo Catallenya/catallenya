@@ -30,6 +30,11 @@ has()  { [[ "$2" == *"$3"* ]] && ok "$1" || bad "$1" "contains: $3" "$2"; }
 hasnt(){ [[ "$2" != *"$3"* ]] && ok "$1" || bad "$1" "must not contain: $3" "$2"; }
 
 TMP="$(mktemp -d)"
+# Recovery markers (ntfy.lib.sh fault_open/fault_close) go to scratch. NOT optional: the
+# undelivered-alert case below turns NTFY_DISABLE off, and with no seam fault_open then
+# writes the LIVE systemd/state/.faults — on 2026-10-31 that left a fake "ntfy: Exited"
+# which the next real hourly run would have "recovered" on the phone.
+export NTFY_FAULT_DIR="${TMP}/faults"
 trap 'rm -rf "$TMP"' EXIT
 
 # --- the docker stub ---------------------------------------------------------

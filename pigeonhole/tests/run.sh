@@ -52,6 +52,9 @@ export NTFY_DISABLE=1
 # the resolver then falls back to the remembered model exactly as it does in an outage.
 export MODELS_URL="http://127.0.0.1:9/v1/models"
 export AI_MODEL_STATE="${TMP}/ai-model" AI_MODEL_REJECTED_STATE="${TMP}/ai-model-rejected"
+# Recovery markers to scratch too: one case below turns NTFY_DISABLE off, and without
+# this seam any fault_open reached from it would write the live systemd/state/.faults.
+export NTFY_FAULT_DIR="${TMP}/faults"
 # shellcheck source=../scripts/pigeonhole.lib.sh
 source "${SCRIPT_DIR}/pigeonhole.lib.sh"
 

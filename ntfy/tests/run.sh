@@ -563,7 +563,7 @@ printf '%s\n%s\n' 1000 "ArchiveBox: Unreachable" > "${FL}/grayjay.ab"
 lifecycle fault_open ab "ArchiveBox: Unreachable" "b" >/dev/null
 is "a repeating fault keeps its FIRST timestamp" "$(head -1 "${FL}/grayjay.ab")" "1000"
 # shellcheck disable=SC2034  # read by fault_close / _fault_marker inside this subshell
-out="$( NTFY_FAULT_DIR="$FL" NTFY_TOPIC=grayjay
+out="$( NTFY_FAULT_DIR="$FL" NTFY_TOPIC=grayjay NTFY_DISABLE=""   # a muted run counts as delivered
         notify() { echo "curl: (22) The requested URL returned error: 502" >&2; }
         fault_close ab Reachable 2>&1 )"
 has "an undelivered recovery speaks, so the reporter fails its unit" "$out" "502"
