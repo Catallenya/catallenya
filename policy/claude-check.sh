@@ -71,6 +71,13 @@ How to tell "blocked" in sandboxed Bash: \`stat -c '%F %s' <path>\` printing
 "character special file 0", or a directory whose \`ls -A\` is empty, or "No such file".
 A permission refusal from Claude Code itself also counts as blocked.
 
+Run every lock command in its OWN Bash call, one at a time, never several in
+parallel: when one call in a parallel batch fails (curl and sudo fail on purpose),
+the calls sent beside it are cancelled, and a cancelled call proves nothing. If a
+call comes back cancelled or interrupted, run it again on its own before judging.
+For every failed lock, put the reason in brackets after its name, a few words of
+the error, never a secret: e.g. "journal [cancelled]", "compose [.env denied]".
+
 Checks (count each numbered line as one lock, give each a short name like "bypass"):
 
 L1 settings (use jq on ~/.claude/settings.json): valid JSON; permissions.defaultMode
