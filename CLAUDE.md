@@ -570,12 +570,18 @@ GitHub Actions (`.github/workflows/ci.yml`) runs on push to main, PRs, and manua
 
   | prefix (directory) | mirror repo | |
   |---|---|---|
-  | `liquidroom` | `MiraiConcepts/liquidroom` | same |
-  | `afterimage` | `MiraiConcepts/afterimage` | same |
-  | `pigeonhole` | `MiraiConcepts/pigeonhole` | same |
-  | **`systemd`** | **`MiraiConcepts/controlplane`** | **mismatch** |
-  | **`ai`** | **`MiraiConcepts/inference`** | **mismatch** |
-  | **`ntfy`** | **`MiraiConcepts/dispatch`** | **mismatch** |
+  | `liquidroom` | `Catallenya/liquidroom` | same |
+  | `afterimage` | `Catallenya/afterimage` | same |
+  | `pigeonhole` | `Catallenya/pigeonhole` | same |
+  | **`systemd`** | **`Catallenya/controlplane`** | **mismatch** |
+  | **`ai`** | **`Catallenya/inference`** | **mismatch** |
+  | **`ntfy`** | **`Catallenya/dispatch`** | **mismatch** |
+
+  All six mirrors and the parent live in the **Catallenya** org since 2026-10-31
+  (moved from MiraiConcepts, which now holds only the standalone apps: hitome,
+  mitsume, nagame, tokens, components). The move silently turned OFF secret
+  scanning and push protection on all seven, exactly as the August transfer did;
+  they were re-enabled the same day. Re-check them after any future transfer.
 
   Three of six match, so **do not assume a mirror's name is its directory** — read
   the matrix. `systemd/` is deliberately not renamed: unlike `capture`/`documents`,
