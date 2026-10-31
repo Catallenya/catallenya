@@ -1,0 +1,13 @@
+# Timer policy: Persistent=true and [Install] WantedBy=timers.target are
+# inherited from systemd/policy/10-base-timer.conf. `systemctl cat` shows them.
+[Unit]
+Description=Daily Grayjay playlist archive (07:55 SGT)
+
+[Timer]
+# Morning-side, because a run can end in a phone notification and a 3am ping trains the
+# owner to mute the topic. 07:55 SGT sits after the three intake sweeps (07:30, 07:45,
+# 07:50) and before the 08:15 heartbeat, so the watchdog sees today's stamp. Daily is
+# plenty: Grayjay itself only writes a backup every couple of days. Timezone pinned
+# rather than inherited: this host runs PDT.
+OnCalendar=*-*-* 07:55:00 Asia/Singapore
+RandomizedDelaySec=5min

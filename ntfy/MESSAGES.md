@@ -64,7 +64,7 @@ missing prefix is what makes that difference readable on a lock screen.
 
 ---
 
-## 2. The vocabulary — 23 verbs
+## 2. The vocabulary — 24 verbs
 
 | Verb | Class | Means |
 |---|---|---|
@@ -83,16 +83,17 @@ missing prefix is what makes that difference readable on a lock screen.
 | `Binned` | pigeonhole | moved to `bin/` after 7 days |
 | `Finished` | liquidroom | stems published |
 | `Downloaded` | liquidroom | interim ping; downloads complete |
-| `Dropped` | liquidroom | download failed |
+| `Dropped` | liquidroom, grayjay | download failed |
 | `Halted` | liquidroom | separation failed |
 | `Emptied` | liquidroom | the separator produced nothing |
 | `Raced` | liquidroom | the destination appeared mid-run |
 | `Unpublished` | liquidroom | the atomic rename failed |
 | `Baked` | immich | rotations written into originals |
 | `Cancelled` | feeds | an event marked "going" vanished from its source |
+| `Archived` | grayjay | a video you were told had failed is safely in ArchiveBox after all |
 | `Still ` | prefix | a nudge |
 
-**Every one is a past participle.** 22 end in `-ed`; `Stuck` is the single irregular and
+**Every one is a past participle.** 23 end in `-ed`; `Stuck` is the single irregular and
 is listed in `NTFY_IRREGULAR_VERBS`. The gate checks this (§9).
 
 ---
@@ -419,7 +420,8 @@ replace it.
 
 Stable fault ids today: `disk-full`, `watchdog-findings`, `changedetection-health`,
 `immich-bake-failed`, `boot-failed`, `afterimage-stuck`, `afterimage-stranded`,
-`pigeonhole-stuck`, `pigeonhole-paused`.
+`pigeonhole-stuck`, `pigeonhole-paused`, `grayjay-backup`, `grayjay-archivebox`,
+`grayjay-missing-<Tag>`.
 
 **This reverses a deliberate fix, and that is intentional.** On 2026-08-19
 `paused_sync()` was made to retract unconditionally so the run that *ended* an outage
@@ -616,6 +618,39 @@ and there is nothing to tap, so no buttons and no id, and it is never withdrawn.
 Each item's detail is when it was (`Tue 13 Oct, 16:45`). Only MARKED events notify;
 an unmarked event that vanishes is simply deleted. The feeds are Python, so the sink
 shells out to this one bash script rather than growing a second transport.
+
+### grayjay — topic `grayjay`
+
+No buttons anywhere: adding a video to a playlist on the phone IS the decision, so
+everything here is a receipt or a fault and nothing is ever withdrawn.
+
+**Silent unless something fails** (owner, 2026-10-31). A video that saves sends nothing,
+however many arrive. The one piece of good news is a video you were already told had
+failed (`Dropped` or `Abandoned`) that saves after all: it closes its own loop with
+`Archived`, the same word as the end state because the end state is the same.
+
+| When | Kind | Title |
+|---|---|---|
+| a video that had failed is now saved | receipt | `Archived: 50 City Pop Style Guitar Licks…` |
+| several such in one run | receipt | `Archived: 3 Videos` |
+| a video's FIRST failure | fault | `Dropped: 1 Video` |
+| still failing 7 days from that first failure | fault | `Abandoned: 1 Video` |
+| neither backup file opens | fault, id `grayjay-backup` | `Backup: Unreadable` |
+| newest backup older than 7 days | fault, id `grayjay-backup` | `Backup: 8 Days Old` |
+| an allow-listed playlist UUID is absent | fault, id `grayjay-missing-<Tag>` | `Guitar: Missing` |
+| ArchiveBox could not be asked, or refused `add` | fault, id `grayjay-archivebox` | `ArchiveBox: Unreachable` |
+
+`Dropped` is liquidroom's word reused, because the situation is the same one: a
+download failed. Between the first failure and day 7 the video is retried daily in
+SILENCE, so `Dropped` is said exactly once per video. A receipt's detail is the tag
+(`Tag: Guitar`); a fault's is the reason, compact and without a stop
+(`Timed out after 2h`). Unreadable and stale share one id because they are two states
+of one subject and only the newest is worth keeping. Already-archived videos, a video
+in both playlists, an unchanged backup, a video that saves normally, and a video taken
+out of the playlist while unfinished (it simply stops being tracked) are all silent. A
+lasting fault re-sends once a day on its stable id, so the phone holds ONE message that
+refreshes itself each morning until the cause is fixed, the same shape as `disk` and the
+watchdog.
 
 ### host / disk / changedetection / watchdog
 

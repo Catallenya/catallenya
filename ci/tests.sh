@@ -48,6 +48,7 @@ SUITES=(
     afterimage
     ai
     ebooks
+    grayjay
     radicale/feeds
     pigeonhole
     systemd

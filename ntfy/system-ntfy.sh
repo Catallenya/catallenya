@@ -96,7 +96,7 @@ fi
 # publish confirmed, never before — an unsubscribed topic accepts a publish with a
 # 200 OK and discards it.
 HOST_TOPIC="host"
-SUBSCRIBED="restic afterimage pigeonhole ebooks immich changedetection disk zpool liquidroom ${HOST_TOPIC}"
+SUBSCRIBED="restic afterimage pigeonhole ebooks immich changedetection disk zpool liquidroom grayjay ${HOST_TOPIC}"
 
 routed_note=""
 if [[ " ${SUBSCRIBED} " != *" ${topic} "* ]]; then

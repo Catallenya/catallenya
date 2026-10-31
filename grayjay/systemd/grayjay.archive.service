@@ -1,0 +1,54 @@
+# Class: scheduled  (see systemd/policy/20-scheduled.conf)
+# Family: intake    (see systemd/policy/30-intake.conf)
+# Base:             (see systemd/policy/10-base.conf)
+#
+# Inherited and therefore NOT repeated here: OnFailure, Type, journal logging, the base
+# hardening, the intake sandbox and its three InaccessiblePaths, and Environment=PATH.
+#
+# Family intake, although there is no drop zone and no tap: it reads a Syncthing folder
+# and writes into another service on the owner's behalf, which is what the family's
+# sandbox exists to bound, and membership is also what makes install.sh run
+# systemd/contract.sh over grayjay/scripts/ — the gate that reads every title.
+#
+# DOCKER SOCKET NOTE. The job drives `docker exec archivebox …` as carrein (docker group
+# via initgroups). ProtectSystem=strict does not block connect() on /run/docker.sock —
+# measured for changedetection.health, which has run docker exec under the same sandbox
+# since the monitor class existed. Socket access is root-equivalent, so for THIS unit
+# the intake InaccessiblePaths are a tripwire rather than a wall; the same trade
+# liquidroom.triage and changedetection.health made.
+
+[Unit]
+Description=Grayjay playlists -> ArchiveBox (hand over new videos, report the old)
+After=docker.service
+# docker is load-bearing: every question and every hand-over is a docker exec.
+Requires=zfs-mount.service docker.service
+
+[Service]
+User=carrein
+Group=carrein
+WorkingDirectory=/zpool/catallenya/grayjay
+Environment=HOME=/home/carrein
+
+# The job never WAITS for a download — `add --bg` and `extract --no-wait` queue and
+# return, and results are judged on a later run. A run is two or three docker execs,
+# each bounded at 5 minutes in grayjay.archive.py; measured runs take seconds. 15min
+# is the ceiling for a wedged ArchiveBox shell, not an estimate of the work.
+TimeoutStartSec=15min
+
+ExecStart=/zpool/catallenya/grayjay/scripts/grayjay.archive.sh
+
+# The per-video records and the lock. The backup is READ from syncthing/data, which the
+# strict sandbox already leaves readable and nothing here may write.
+ReadWritePaths=/zpool/catallenya/grayjay/state
+
+[X-Catallenya]
+Class=scheduled
+Family=intake
+# Daily at 07:55 SGT with 5 minutes of jitter. 36h allows one missed run.
+MaxAge=36h
+# No natural artifact on most days — a run that finds nothing new writes nothing — so a
+# completion stamp, written by 10-base.conf only when the run SUCCEEDED. A run that
+# could not read the backup or reach ArchiveBox exits non-zero and leaves it stale.
+Freshness=stamp:/zpool/catallenya/systemd/state/grayjay.archive
+# The backup arrives over Syncthing; if that container is gone, nothing new ever will.
+Producer=container:syncthing

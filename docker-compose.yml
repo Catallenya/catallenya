@@ -902,6 +902,11 @@ services:
       # real cap was the 750m default until 2026-09-27).
       - ARCHIVEDOTORG_ENABLED=False # Don't submit to archive.org.
       - YTDLP_MAX_SIZE=5000m # Allow up to 5 GB media (YouTube videos, etc.).
+      # 2h per video, for the grayjay pipeline's playlist videos. The 120s default
+      # (inherited from TIMEOUT) fails anything past ~20-25 min at the ~6 MB/s measured
+      # here. Note YTDLP_MAX_SIZE above is a format PREFERENCE with an unlimited
+      # fallback, so this timeout is the only real bound on one download.
+      - YTDLP_TIMEOUT=7200
       - TIMEOUT=120 # Allow slow pages up to 120s.
       - CHECK_SSL_VALIDITY=False
     labels:

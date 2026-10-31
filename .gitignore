@@ -343,6 +343,26 @@ ntfy/.env
 !liquidroom/tests/
 !liquidroom/tests/run.sh
 
+# grayjay pipeline (Grayjay playlist backup -> ArchiveBox) — CODE ONLY, per-file for the
+# same reason as every block above. grayjay/state/ (one record per video, the lock) stays
+# under the `*` deny, and so does PLAN.md, the build brief.
+!grayjay/
+!grayjay/README.md
+!grayjay/scripts/
+!grayjay/scripts/grayjay.lib.sh
+!grayjay/scripts/grayjay.archive.sh
+!grayjay/scripts/grayjay.archive.py
+!grayjay/scripts/grayjay.abx.py
+!grayjay/systemd/
+!grayjay/systemd/grayjay.archive.service
+!grayjay/systemd/grayjay.archive.timer
+!grayjay/tests/
+!grayjay/tests/run.sh
+# The EMPTY state dir is tracked, never its contents: ReadWritePaths= refuses to start the
+# unit (226/NAMESPACE) when the path is missing, before the script's own mkdir can run.
+!grayjay/state/
+!grayjay/state/.gitkeep
+
 # The shared Syncthing quiet gate — ONE file, per-file, and this is the sharpest
 # allowlist in the file after tailscale's node key. syncthing/data/ is the synced
 # corpus itself (personal IDs, medical, financial, every device's shared folder)

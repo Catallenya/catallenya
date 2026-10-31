@@ -128,6 +128,9 @@ declare -A SYMLINKS=(
     # empty FOLDER now and no .path verb can express emptiness. It REPLACED
     # liquidroom.triage.path on 2026-08-28 — see liquidroom/systemd/liquidroom.triage.timer.
     ["liquidroom.triage.timer"]="${REPO_DIR}/liquidroom/systemd/liquidroom.triage.timer"
+    # Grayjay's playlist backup arrives over Syncthing every couple of days; once a day
+    # the new videos in two playlists are handed to ArchiveBox.
+    ["grayjay.archive.timer"]="${REPO_DIR}/grayjay/systemd/grayjay.archive.timer"
 
     # --- Paths (event-triggered, not scheduled) ---
     ["afterimage.triage.path"]="${REPO_DIR}/afterimage/systemd/afterimage.triage.path"
@@ -167,6 +170,7 @@ declare -A SYMLINKS=(
     ["afterimage.triage.service"]="${REPO_DIR}/afterimage/systemd/afterimage.triage.service"
     ["afterimage.sweep.service"]="${REPO_DIR}/afterimage/systemd/afterimage.sweep.service"
     ["liquidroom.triage.service"]="${REPO_DIR}/liquidroom/systemd/liquidroom.triage.service"
+    ["grayjay.archive.service"]="${REPO_DIR}/grayjay/systemd/grayjay.archive.service"
     ["catallenya.heartbeat.service"]="${REPO_DIR}/systemd/catallenya.heartbeat.service"
 )
 
@@ -603,7 +607,7 @@ tracked_units() {
         local d
         for d in systemd restic host changedetection ntfy afterimage/systemd \
                  pigeonhole/systemd ebooks/systemd liquidroom/systemd immich \
-                 radicale/feeds; do
+                 radicale/feeds grayjay/systemd; do
             [[ -d "${REPO_DIR}/${d}" ]] || continue
             ( cd "${REPO_DIR}" && find "$d" \
                 \( -name '*.service' -o -name '*.timer' -o -name '*.path' \) )

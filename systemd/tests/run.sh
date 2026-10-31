@@ -53,7 +53,7 @@ trap 'rm -rf "$CHECK_TREE" "$PRISTINE_TREE"' EXIT
 # that way, and liquidroom/systemd had been missing since it shipped.
 (cd "$REPO" && find systemd restic host changedetection ntfy \
     afterimage/systemd pigeonhole/systemd ebooks/systemd liquidroom/systemd immich \
-    radicale/feeds \
+    radicale/feeds grayjay/systemd \
     \( -name '*.service' -o -name '*.timer' -o -name '*.path' -o -name '*.conf' \) \
     -exec cp --parents -t "$PRISTINE_TREE" {} +)
 
@@ -116,7 +116,7 @@ gate_says "cancelling OnFailure= without declaring it is refused" \
     "cancels its inherited OnFailure="
 gate_says "and the acknowledgement is what clears it" \
     "${REPO}/host/disk.service" 's/^\[Service\]$/OnFailure=\n[Service]/; s/^Class=monitor$/Class=monitor\nSelfAlerting=acknowledged/' \
-    "50 units satisfy the contract"
+    "52 units satisfy the contract"
 
 gate_says "a missing User= is refused" \
     "${REPO}/host/disk.service" '/^User=/d' "no explicit User="
