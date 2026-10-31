@@ -136,10 +136,13 @@ line() { grep -m1 -E "^$1 " <<<"$raw" | tr -d '\r' | cut -c1-600; }
 locks=$(line LOCKS); unused=$(line UNUSED); secrets=$(line SECRETS); unusual=$(line UNUSUAL)
 [[ "$locks" =~ ^LOCKS\ ([0-9]+)/([0-9]+)(\ FAIL:\ (.*))?$ ]] || fail4 "no usable answer (rc $rc)"
 pass=${BASH_REMATCH[1]} total=${BASH_REMATCH[2]} fails=${BASH_REMATCH[4]}
+# A missing report line must not read as a clean 0; the Mac reports this as NOT RUN.
+[[ "$unused" =~ ^UNUSED\ [0-9]+ && "$secrets" =~ ^SECRETS\ [0-9]+ && "$unusual" =~ ^UNUSUAL\ [0-9]+ ]] \
+  || fail4 "incomplete answer"
 
 # Fold in the bypass check.
 total=$((total + 1))
 if [[ $bypass == PASS ]]; then pass=$((pass + 1)); else fails=${fails:+$fails, }bypass; fi
 locks="LOCKS $pass/$total${fails:+ FAIL: $fails}"
 
-printf '%s\n%s\n%s\n%s\n' "$locks" "${unused:-UNUSED 0}" "${secrets:-SECRETS 0}" "${unusual:-UNUSUAL 0}"
+printf '%s\n%s\n%s\n%s\n' "$locks" "$unused" "$secrets" "$unusual"
