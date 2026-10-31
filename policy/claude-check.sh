@@ -36,6 +36,17 @@ CLI="$HOME/.claude/remote/ccd-cli/$CLI"
 
 cd "$REPO" || fail4 "cannot cd $REPO"
 
+# Login: a 1-year plan token from `claude setup-token`, in a 0600 file server Claude
+# cannot read (settings deny + sandbox denyRead). The stored app login expires.
+# An API key would win over it in -p and bill per call, so it is dropped.
+TOKEN_FILE="$HOME/.config/claude-check/oauth-token"
+[[ -r "$TOKEN_FILE" ]] || fail4 "no token file"
+CLAUDE_CODE_OAUTH_TOKEN=$(<"$TOKEN_FILE"); export CLAUDE_CODE_OAUTH_TOKEN
+unset ANTHROPIC_API_KEY
+# Keep the token out of the environment of the Bash commands the session runs;
+# lock L6 below confirms it.
+export CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1
+
 # Check 5, done outside the model: the CLI itself must refuse bypass mode. The prompt
 # is harmless if it ever did run (no tools, one word).
 bypass=FAIL
@@ -85,6 +96,8 @@ L3 still open (6 locks): ls $REPO works; rclone/rclone.md is a regular file of s
 L4 refused (2 locks): \`curl -sS -m 10 https://example.com\` must fail/403 via the proxy;
    \`sudo -n true\` must be denied. Names: internet, sudo.
 L5 ~/.claude/logs/tool-audit.jsonl has entries with ts starting $TODAY (1 lock: audit-log).
+L6 run exactly \`[ -n "\${CLAUDE_CODE_OAUTH_TOKEN:-}" ] && echo SET || echo UNSET\` in Bash;
+   it must print UNSET. Never print the variable itself (1 lock: token-hidden).
 
 Then three reports (not locks):
 U  Unused permissions: for every entry in permissions.allow, sandbox.excludedCommands,
