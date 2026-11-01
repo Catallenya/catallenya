@@ -27,21 +27,21 @@ NTFY_VERBS=(Archived Dropped Abandoned)
 # shellcheck disable=SC2034  # consumed by systemd/contract.sh
 NTFY_NOUNS=(Video)
 # shellcheck disable=SC2034  # consumed by systemd/contract.sh
-NTFY_SUBJECTS=(Backup ArchiveBox GuitarCore AddisonCore HowFarAwayIsIt AbsolutelyUnderstandGuitar)
+NTFY_SUBJECTS=(Backup ArchiveBox Channel)
 
 NTFY_TOPIC="grayjay"
 
-# THE ALLOW-LIST. By UUID, never by name: the owner renames playlists (the AddisonCore
-# emoji is going) and a rename must change nothing. Deleting a playlist and making a new
-# one with the same name DOES change the UUID, and the job then says `<Tag>: Missing`
-# rather than guessing — put the new UUID here. The tag is what ArchiveBox shows.
-PLAYLISTS=(
-    "a359d200-8781-409e-b76a-ba0b6c3e58d5=GuitarCore"   # was the Guitar tag until 2026-11-01
-    "e46f4674-39b9-4d51-aee0-3b38758ac332=AddisonCore"
-    # Added 2026-10-31, IDs read from that day's backup and confirmed by the owner.
-    "442d205f-a3e0-458d-b835-58ac3d4284fc=HowFarAwayIsIt"
-    "c3d3a827-ffae-496f-b3b7-ce2a71cf2dd0=AbsolutelyUnderstandGuitar"
-)
+# WHAT IS FOLLOWED IS DECIDED ON THE PHONE (owner, 2026-11-01), so nothing here names a
+# playlist or a channel. A playlist is followed while its name starts with the marker; a
+# channel while it sits in the subscription group named below. Its ArchiveBox tag is the
+# name minus the marker, letters and digits only: "📦 How Far Away Is It" ->
+# HowFarAwayIsIt. Until 2026-11-01 this was a list of playlist UUIDs edited by hand,
+# which meant every new playlist needed a change to this repo.
+GRAYJAY_MARKER="📦"
+GRAYJAY_GROUP="Archive"
+# The yt-dlp ArchiveBox downloads with, inside its container (0.9 keeps it in its own
+# abxpkg venv and has no yt-dlp on PATH). Used only to LIST a channel's videos.
+GRAYJAY_YTDLP="/opt/archivebox/lib/uv/packages/yt-dlp/venv/bin/yt-dlp"
 
 # Overridable ONLY so the suite can run against a scratch tree and a fake ArchiveBox.
 # Never set in production — the defaults are the only values systemd runs with.
@@ -53,11 +53,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CORE="${SCRIPT_DIR}/grayjay.archive.py"
 
 # Stable sequence ids, so a fault that recurs daily REPLACES yesterday's instead of
-# stacking (ntfy/MESSAGES.md § 4). Unreadable and stale are two states of one subject,
+# stacking (ntfy/MESSAGES.md § 4). One per channel, keyed by its channel id. Unreadable and stale are two states of one subject,
 # so they share an id: the newest word on the backup is the only one worth keeping.
 BACKUP_NTFY_ID="grayjay-backup"
 ARCHIVEBOX_NTFY_ID="grayjay-archivebox"
-MISSING_NTFY_PREFIX="grayjay-missing-"
+CHANNEL_NTFY_PREFIX="grayjay-channel-"
 
 export PYTHONDONTWRITEBYTECODE=1   # scripts/ is read-only under the sandbox; never litter it
 

@@ -453,7 +453,7 @@ replace it.
 Stable fault ids today: `disk-full`, `watchdog-findings`, `changedetection-health`,
 `immich-bake-failed`, `boot-failed`, `afterimage-stuck`, `afterimage-stranded`,
 `pigeonhole-stuck`, `pigeonhole-paused`, `grayjay-backup`, `grayjay-archivebox`,
-`grayjay-missing-<Tag>`.
+`grayjay-channel-<channel id>`.
 
 **This reverses a deliberate fix, and that is intentional.** On 2026-08-19
 `paused_sync()` was made to retract unconditionally so the run that *ended* an outage
@@ -659,7 +659,8 @@ shells out to this one bash script rather than growing a second transport.
 
 ### grayjay — topic `grayjay`
 
-No buttons anywhere: adding a video to a playlist on the phone IS the decision, so
+No buttons anywhere: adding a video to a 📦 playlist, or a channel to the Archive
+subscription group, on the phone IS the decision, so
 everything here is a receipt or a fault and nothing is ever withdrawn.
 
 **Silent unless something fails** (owner, 2026-10-31). A video that saves sends nothing,
@@ -675,20 +676,24 @@ failed (`Dropped` or `Abandoned`) that saves after all: it closes its own loop w
 | still failing 7 days from that first failure | fault | `Abandoned: 1 Video` |
 | neither backup file opens | fault, id `grayjay-backup` | `Backup: Unreadable` |
 | newest backup older than 7 days | fault, id `grayjay-backup` | `Backup: 8 Days Old` |
-| an allow-listed playlist UUID is absent | fault, id `grayjay-missing-<Tag>` | `GuitarCore: Missing` |
+| a channel in the Archive group cannot be listed | fault, id `grayjay-channel-<channel id>` | `Channel: Unreadable` |
 | ArchiveBox could not be asked, or refused `add` | fault, id `grayjay-archivebox` | `ArchiveBox: Unreachable` |
 | ArchiveBox answers again | recovery, same id | `ArchiveBox: Reachable` |
 | the backup opens and is fresh again | recovery, id `grayjay-backup` | `Backup: Current` |
-| a missing playlist is back | recovery, id `grayjay-missing-<Tag>` | `GuitarCore: Found` |
+| that channel lists again | recovery, same id | `Channel: Readable` |
 
 `Dropped` is liquidroom's word reused, because the situation is the same one: a
 download failed. Between the first failure and day 7 the video is retried daily in
 SILENCE, so `Dropped` is said exactly once per video. A receipt's detail is the tag
-(`Tag: GuitarCore`); a fault's is the reason, compact and without a stop
+(`Tag: Guitar`); a fault's is the reason, compact and without a stop
 (`Timed out after 2h`). Unreadable and stale share one id because they are two states
 of one subject and only the newest is worth keeping. Already-archived videos, a video
 in both playlists, an unchanged backup, a video that saves normally, and a video taken
-out of the playlist while unfinished (it simply stops being tracked) are all silent. A
+out of the playlist while unfinished, or whose playlist or channel stops being followed
+(it simply stops being tracked) are all silent. A video that vanishes from a channel
+STILL followed is not: it is a failure, so it is `Dropped` and `Abandoned` like any
+other. `<Tag>: Missing` and `<Tag>: Found` retired on 2026-11-01 with the hand-kept
+playlist list; a playlist that disappears is no longer followed. A
 lasting fault re-sends once a day on its stable id, so the phone holds ONE message that
 refreshes itself each morning until the cause is fixed, the same shape as `disk` and the
 watchdog.

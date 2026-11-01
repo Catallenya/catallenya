@@ -46,7 +46,14 @@ BACKUP = Path(os.environ.get("GRAYJAY_BACKUP", ""))
 STATE = Path(os.environ.get("GRAYJAY_STATE", ""))
 DOCKER = os.environ.get("GRAYJAY_DOCKER", "docker")
 NOW = float(os.environ.get("GRAYJAY_NOW") or time.time())
-PLAYLISTS = [p.split("=", 1) for p in os.environ.get("GRAYJAY_PLAYLISTS", "").split()]
+# WHAT IS FOLLOWED IS DECIDED ON THE PHONE (owner, 2026-11-01), never in this repo: a
+# playlist whose name starts with MARKER, and every channel in the subscription group
+# named GROUP. The tag is the name with the marker and everything but letters and digits
+# removed: "📦 How Far Away Is It" -> HowFarAwayIsIt, "K's Archives" -> KsArchives.
+MARKER = os.environ.get("GRAYJAY_MARKER", "\U0001F4E6")   # 📦
+GROUP = os.environ.get("GRAYJAY_GROUP", "Archive")
+YTDLP = os.environ.get("GRAYJAY_YTDLP", "yt-dlp")
+CHANNEL_LIST_TIMEOUT = 300
 HELPER = Path(__file__).with_name("grayjay.abx.py")
 
 DAY = 86400
@@ -103,7 +110,7 @@ def open_backup(path):
             entries = json.loads(raw)
         except Exception:  # a false EOCD inside compressed data, or a cut too early
             continue
-        return parse_playlists(entries)
+        return {"playlists": parse_playlists(entries), "groups": parse_groups(zf)}
 
 
 def parse_playlists(entries):
@@ -122,8 +129,37 @@ def parse_playlists(entries):
     return out
 
 
+def parse_groups(zf):
+    """stores/subscription_groups: a JSON list of JSON strings, each
+    {"id", "name", "urls": [channel URL…], …}. Absent in a backup with no groups at all.
+    Returns [(name, [url…])]."""
+    try:
+        entries = json.loads(zf.read("stores/subscription_groups"))
+    except KeyError:
+        return []
+    if not isinstance(entries, list):
+        raise ValueError("stores/subscription_groups is not a list")
+    out = []
+    for e in entries:
+        if isinstance(e, str):
+            e = json.loads(e)
+        if isinstance(e, dict) and isinstance(e.get("urls"), list):
+            out.append((str(e.get("name") or ""), [u for u in e["urls"] if isinstance(u, str)]))
+    return out
+
+
+def tag_of(name):
+    # Letters and digits only, which also drops the 📦 marker and any other emoji.
+    return "".join(c for c in name if c.isalnum())
+
+
+def channel_id(url):
+    m = re.search(r"/channel/(UC[A-Za-z0-9_-]{22})", url)
+    return m.group(1) if m else url.strip().rstrip("/")
+
+
 def read_backup():
-    """(playlists or None, which file, newest mtime or None).
+    """({"playlists", "groups"} or None, which file, newest mtime or None).
 
     The newest mtime is taken over BOTH files whether or not they parse: staleness is a
     question about the phone, not about whether we could read what it sent.
@@ -239,6 +275,31 @@ def abx_query(items):
         if line.startswith("GJ_RESULT="):
             return json.loads(line[len("GJ_RESULT="):])
     raise Unreachable("ArchiveBox shell gave no answer")
+
+
+def list_channel(url):
+    """(channel name, [video id…]) for a channel's Videos tab, or raise Unreachable.
+
+    Asked of the yt-dlp ArchiveBox itself downloads with, inside its container, so the
+    list and the downloads come from one tool at one version and nothing new is
+    installed on the host. --flat-playlist reads the listing only: one request per ~100
+    videos, no video page is opened. Shorts and live streams are left out by choice
+    (owner, 2026-11-01): only the Videos tab counts.
+    """
+    out = docker(["exec", "-u", "archivebox", "archivebox", YTDLP, "--flat-playlist",
+                  "--no-warnings", "--print",
+                  "%(playlist_channel,channel,playlist_uploader,uploader)s\t%(id)s",
+                  url.strip().rstrip("/") + "/videos"], timeout=CHANNEL_LIST_TIMEOUT)
+    name, ids = "", []
+    for line in out.splitlines():
+        n, _, vid = line.rpartition("\t")
+        if YT_ID.match(vid.strip()):
+            ids.append(vid.strip())
+            if not name and n.strip() not in ("", "NA"):
+                name = n.strip()
+    if not ids:
+        raise Unreachable("the channel listed no videos")
+    return name, ids
 
 
 def abx_add(tags, urls):
@@ -357,12 +418,14 @@ def clean_title(t, fallback):
 
 # ---------------------------------------------------------------------------- run
 def main():
-    report = {"backup": {}, "missing": [], "archivebox": "ok", "archivebox_error": "",
+    report = {"backup": {}, "followed": [], "channels": [], "archivebox": "ok",
+              "archivebox_error": "",
               "archived": [], "dropped": [], "abandoned": [], "handed": 0,
               "retried": 0, "adopted": 0, "backfilled": 0, "pending": 0, "removed": 0,
               "readded": 0}
 
-    playlists, used, newest = read_backup()
+    data, used, newest = read_backup()
+    playlists = data["playlists"] if data is not None else None
     report["backup"] = {
         "state": "ok" if playlists is not None else "unreadable",
         "used": used,
@@ -373,34 +436,67 @@ def main():
     if used == "old":
         log("main backup unreadable; used GrayjayBackup.ezip.old")
 
-    wanted = {}   # key -> {"url", "alt", "tags"}
-    if playlists is not None:
-        for uuid, tag in PLAYLISTS:
-            if uuid not in playlists:
-                report["missing"].append({"tag": tag, "uuid": uuid})
+    wanted = {}   # key -> {"url", "alt", "tags", "channel"}
+
+    def want(url, tag, chid=None):
+        key, canon, alt = canonical(url)
+        w = wanted.setdefault(key, {"url": canon, "alt": alt, "tags": [], "channel": None})
+        if tag not in w["tags"]:
+            w["tags"].append(tag)
+        if chid:
+            w["channel"] = chid
+
+    followed_channels = set()   # channel ids in the group, listed or not
+    if data is not None:
+        for uuid, (name, urls) in sorted(playlists.items()):
+            if not name.strip().startswith(MARKER):
                 continue
-            for url in playlists[uuid][1]:
-                key, canon, alt = canonical(url)
-                w = wanted.setdefault(key, {"url": canon, "alt": alt, "tags": []})
-                if tag not in w["tags"]:
-                    w["tags"].append(tag)
+            tag = tag_of(name)
+            if not tag:
+                log("playlist %s is marked but its name leaves no tag; skipped" % uuid)
+                continue
+            if tag not in report["followed"]:
+                report["followed"].append(tag)
+            for url in urls:
+                want(url, tag)
+        for gname, urls in data["groups"]:
+            if gname.strip() != GROUP:
+                continue
+            for curl in urls:
+                chid = channel_id(curl)
+                followed_channels.add(chid)
+                try:
+                    name, ids = list_channel(curl)
+                except Unreachable as e:
+                    report["channels"].append({"id": chid, "url": curl, "state": "unreadable",
+                                               "error": str(e)})
+                    continue
+                tag = tag_of(name) or chid
+                report["channels"].append({"id": chid, "url": curl, "state": "ok",
+                                           "tag": tag, "count": len(ids)})
+                if tag not in report["followed"]:
+                    report["followed"].append(tag)
+                for vid in ids:
+                    want("https://www.youtube.com/watch?v=" + vid, tag, chid)
 
     records = load_records()
 
-    # REMOVAL (owner, 2026-10-31). A video taken out of every allow-listed playlist while
-    # it is still unfinished (pending, failed or abandoned) stops being tracked, silently:
-    # no more retries, no Abandoned, and nothing in ArchiveBox is touched, so a download
-    # already running finishes on its own and keeps its copy. Finished videos (archived,
-    # adopted) are left exactly as they are; removing a video never deletes the copy or
-    # its tag. Two guards, because a wrong "removed" silently stops real work: only a
-    # READABLE backup can say a video is gone, and a video whose playlist is itself
-    # Missing (deleted and recreated, new UUID) is not gone, its playlist is.
-    if playlists is not None:
-        missing_tags = {m["tag"] for m in report["missing"]}
+    # REMOVAL (owner, 2026-10-31; 2026-11-01). A video no longer wanted while it is still
+    # unfinished (pending, failed or abandoned) stops being tracked, silently: no more
+    # retries, no Abandoned, and nothing in ArchiveBox is touched, so a download already
+    # running finishes on its own and keeps its copy. Finished videos (archived, adopted)
+    # are left exactly as they are; nothing ever deletes a copy or its tag. "No longer
+    # wanted" is: taken out of every marked playlist, its playlist unmarked, or its channel
+    # taken out of the group. Two guards, because a wrong "removed" silently stops real
+    # work: only a READABLE backup can say a video is gone, and a video that vanished from
+    # a channel STILL in the group is not removed but kept trying — that is the very case
+    # an archive is for, and you are told if it is lost (owner, 2026-11-01). The same
+    # guard covers a channel whose listing failed this run.
+    if data is not None:
         for k, rec in records.items():
             if k in wanted or rec["status"] not in ("pending", "failed", "abandoned"):
                 continue
-            if any(t in missing_tags for t in rec.get("tags", [])):
+            if rec.get("channel") in followed_channels:
                 continue
             rec["status"] = "removed"
             rec["removed_at"] = NOW
@@ -414,7 +510,8 @@ def main():
         rec = records.get(k, {})
         tags = sorted(set(wanted.get(k, {}).get("tags", [])) | set(rec.get("tags", [])))
         src = wanted.get(k) or {"url": rec["url"], "alt": rec.get("alt", [])}
-        items.append({"key": k, "url": src["url"], "alt": src["alt"], "tags": tags})
+        items.append({"key": k, "url": src["url"], "alt": src["alt"], "tags": tags,
+                      "channel": wanted.get(k, {}).get("channel") or rec.get("channel")})
 
     # Whether ArchiveBox was actually asked this run. "ok" is the report's DEFAULT, so on
     # its own it cannot tell "answered" from "never asked"; the shell closes an open
@@ -441,7 +538,7 @@ def main():
                 # Tagged (above) and never announced. Adopted as it is only when it
                 # already holds the video; otherwise see backfill() below.
                 rec = {"key": k, "url": it["url"], "alt": it["alt"], "tags": it["tags"],
-                       "status": "adopted", "snapshot_id": f.get("id"),
+                       "channel": it["channel"], "status": "adopted", "snapshot_id": f.get("id"),
                        "title": clean_title(f.get("title"), it["url"]),
                        "first_seen_at": NOW}
                 if not backfill(rec, f, to_retry, report):
@@ -449,11 +546,13 @@ def main():
                     report["adopted"] += 1
             else:
                 rec = {"key": k, "url": it["url"], "alt": it["alt"], "tags": it["tags"],
-                       "status": "new", "first_seen_at": NOW, "first_failed_at": None}
+                       "channel": it["channel"], "status": "new", "first_seen_at": NOW,
+                       "first_failed_at": None}
                 to_add.setdefault(tuple(it["tags"]), []).append(rec)
             continue
 
         rec["tags"] = it["tags"]
+        rec["channel"] = it["channel"]
         if rec["status"] == "removed":
             # ADDED BACK after a removal: a fresh start (owner, 2026-10-31). A new 7-day
             # clock, so it can be Dropped and Abandoned again; `had_failed` remembers that

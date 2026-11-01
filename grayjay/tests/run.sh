@@ -71,6 +71,15 @@ def find(url, alt):
             if a in u:
                 return u
     return None
+if "--flat-playlist" in cmd:
+    # yt-dlp listing a channel: db["channels"][<url>/videos] = {"name", "ids"} or "fail"
+    ch = db.get("channels", {}).get(cmd[-1])
+    if ch is None or ch == "fail":
+        print("ERROR: [youtube:tab] Unable to download API page: HTTP Error 404", file=sys.stderr)
+        done(1)
+    for vid in ch["ids"]:
+        print("%s\t%s" % (ch["name"], vid))
+    done()
 if cmd[:3] == ["manage", "shell", "-c"]:
     req = json.loads(os.environ.get("GJ_REQ") or "{}")
     out = {}
@@ -140,6 +149,7 @@ yt() { printf 'https://www.youtube.com/watch?v=%s' "$1"; }
 
 # ---------------------------------------------------------------- backup builder
 # mk_backup <path> [--junk] [--bad-header] "<name>:::<uuid>" url url -- "<name>:::<uuid>" url …
+#   a block headed "GROUP:<name>" is a subscription group of channel URLs instead
 mk_backup() {
     python3 -I - "$@" <<'PY'
 import io, json, sys, zipfile
@@ -156,12 +166,15 @@ for r in rest:
         lists.append(cur)
     else:
         cur.append(r)
-entries = ["\n".join(l) for l in lists]
+entries = ["\n".join(l) for l in lists if not l[0].startswith("GROUP:")]
+groups = [json.dumps({"id": "g%d" % i, "name": l[0][6:], "urls": l[1:], "priority": 0})
+          for i, l in enumerate(lists) if l[0].startswith("GROUP:")]
 def build(entries, pad=b""):
     b = io.BytesIO()
     with zipfile.ZipFile(b, "w", zipfile.ZIP_DEFLATED) as z:
         z.writestr("exportInfo", '{"version":"1"}')
         z.writestr("stores/Playlists", json.dumps(entries))
+        z.writestr("stores/subscription_groups", json.dumps(groups))
         z.writestr("stores/history", "watch history" + pad.decode())
     return b.getvalue()
 hdr = b"BADHEADR" if badhdr else bytes.fromhex("11223344474a0100")
@@ -196,10 +209,6 @@ run_job() {
         export GRAYJAY_NOW="$NOW"
         # shellcheck source=../scripts/grayjay.archive.sh
         source "${SCRIPT_DIR}/grayjay.archive.sh"
-        # The synthetic backups carry only these two playlists. Pinning the allow-list
-        # here keeps every case independent of how many playlists production follows;
-        # the real list is checked on its own under "hygiene".
-        PLAYLISTS=("${GUITAR}=Guitar" "${ADDISON}=AddisonCore")
         notify() {
             printf '%s\t%s\n' "$1" "${4:-}" >> "${CAP}/titles"
             printf '%s\n----\n' "$2" >> "${CAP}/bodies"
@@ -217,8 +226,8 @@ clear_cap() { : > "${CAP}/titles"; : > "${CAP}/bodies"; }
 
 standard_backup() {
     mk_backup "$GRAYJAY_BACKUP" \
-        "Guitar:::${GUITAR}" "$(yt aaaaaaaaaaa)" "https://youtu.be/bbbbbbbbbbb?si=MMxwzAZj2svCz9HH" \
-        -- "🐟 AddisonCore:::${ADDISON}" "$(yt ccccccccccc)" \
+        "📦 Guitar:::${GUITAR}" "$(yt aaaaaaaaaaa)" "https://youtu.be/bbbbbbbbbbb?si=MMxwzAZj2svCz9HH" \
+        -- "📦 🐟 AddisonCore:::${ADDISON}" "$(yt ccccccccccc)" \
            "https://www.youtube.com/watch?v=ddddddddddd&list=RDddddddddddd&start_radio=1" "$(yt aaaaaaaaaaa)" \
         -- "Mastering:::0f5536d0-761e-4c80-84e6-6366f9478308" "$(yt eeeeeeeeeee)"
     age_backup 1
@@ -312,7 +321,7 @@ has "...and the journal still counts them" "$(cat "${TMP}/out")" "2 archived"
 # ===================================================================== the backup
 echo "backup parsing"
 fresh
-mk_backup "$GRAYJAY_BACKUP" --junk "Guitar:::${GUITAR}" "$(yt aaaaaaaaaaa)" -- "AddisonCore:::${ADDISON}"
+mk_backup "$GRAYJAY_BACKUP" --junk "📦 Guitar:::${GUITAR}" "$(yt aaaaaaaaaaa)" -- "📦 AddisonCore:::${ADDISON}"
 age_backup 1
 run_job; rc=$?
 is "a junk tail after the zip is cut away (Grayjay overwrites without truncating)" "$rc" "0"
@@ -321,7 +330,7 @@ hasnt "...the OLD archive's playlist in the tail is not" "$(calls)" "zzzzzzzzzzz
 
 fresh
 printf 'garbage' > "$GRAYJAY_BACKUP"
-mk_backup "${GRAYJAY_BACKUP}.old" "Guitar:::${GUITAR}" "$(yt aaaaaaaaaaa)" -- "AddisonCore:::${ADDISON}"
+mk_backup "${GRAYJAY_BACKUP}.old" "📦 Guitar:::${GUITAR}" "$(yt aaaaaaaaaaa)" -- "📦 AddisonCore:::${ADDISON}"
 age_backup 1
 run_job; rc=$?
 is "an unreadable main backup falls back to .old" "$rc" "0"
@@ -331,7 +340,7 @@ is "...silently" "$(titles)" ""
 
 fresh
 printf 'garbage' > "$GRAYJAY_BACKUP"
-mk_backup "${GRAYJAY_BACKUP}.old" --bad-header "Guitar:::${GUITAR}" "$(yt aaaaaaaaaaa)"
+mk_backup "${GRAYJAY_BACKUP}.old" --bad-header "📦 Guitar:::${GUITAR}" "$(yt aaaaaaaaaaa)"
 age_backup 1
 run_job; rc=$?
 is "both files unreadable: Backup: Unreadable" "$(titles)" "Backup: Unreadable"
@@ -345,25 +354,43 @@ run_job; rc=$?
 is "no backup at all is Unreadable too" "$(titles)" "Backup: Unreadable"
 has "...and says the file is missing" "$(bodies)" "No backup file exists"
 
-echo "playlists"
+echo "playlists: the marker decides (owner, 2026-11-01)"
 fresh
-mk_backup "$GRAYJAY_BACKUP" "Guitar:::${GUITAR}" "$(yt aaaaaaaaaaa)"
+mk_backup "$GRAYJAY_BACKUP" "📦 Guitar:::${GUITAR}" "$(yt aaaaaaaaaaa)" \
+    -- "📦 How Far Away Is It:::11111111-1111-1111-1111-111111111111" "$(yt bbbbbbbbbbb)" \
+    -- "Mastering.com:::22222222-2222-2222-2222-222222222222" "$(yt eeeeeeeeeee)" \
+    -- "📦:::33333333-3333-3333-3333-333333333333" "$(yt ggggggggggg)"
 age_backup 1
 run_job; rc=$?
-is "an allow-listed UUID absent from the backup: <Tag>: Missing" "$(titles)" "AddisonCore: Missing"
-is "...on a per-tag stable id" "$(ids)" "grayjay-missing-AddisonCore"
-has "...naming the UUID" "$(bodies)" "$ADDISON"
-is "...a finding about the world, so the run still succeeds" "$rc" "0"
-has "...and the playlist that IS there is still handled" "$(calls)" "$(yt aaaaaaaaaaa)"
+c="$(calls)"
+has "a playlist whose name starts with the marker is followed" "$c" "add --bg --tag Guitar --plugins title,ytdlp $(yt aaaaaaaaaaa)"
+has "...its tag is the name without the marker, letters and digits only" "$c" "--tag HowFarAwayIsIt "
+hasnt "...the marker never reaches a tag" "$c" "📦"
+hasnt "an unmarked playlist is ignored" "$c" "eeeeeeeeeee"
+hasnt "a marked playlist whose name leaves no tag is skipped, not tagged empty" "$c" "ggggggggggg"
+is "...and none of it is news" "$(titles)" ""
+is "...a clean run exits 0" "$rc" "0"
+j="$(cat "${TMP}/out" "${TMP}/err")"
+has "the journal line says what is followed" "$j" "; following "
+has "...naming each tag" "$j" "HowFarAwayIsIt"
 
 clear_cap; abx_reset_calls
-mk_backup "$GRAYJAY_BACKUP" "Guitar Licks (renamed):::${GUITAR}" "$(yt aaaaaaaaaaa)" -- "AddisonCore:::${ADDISON}"
+abx_snap "$(yt aaaaaaaaaaa)" sealed "Kept - YouTube" "" succeeded "x" "Kept.mp4"
+abx_snap "$(yt bbbbbbbbbbb)" sealed "Pending - YouTube" "" started
+run_job   # both still marked: the first is saved, the second still downloading
+mk_backup "$GRAYJAY_BACKUP" "Guitar:::${GUITAR}" "$(yt aaaaaaaaaaa)" \
+    -- "📦 How Far Away Is It:::11111111-1111-1111-1111-111111111111" "$(yt bbbbbbbbbbb)"
 age_backup 1
 run_job
-# AddisonCore is back in this backup, so the Missing from the run above recovers in
-# place (the recovery rule); the RENAMED Guitar playlist itself adds nothing.
-is "a renamed playlist (same UUID) changes nothing; the missing one is Found" "$(titles)" "AddisonCore: Found"
-hasnt "...hands nothing over again" "$(calls)" " add "
+is "a playlist still marked keeps its unfinished video" "$(rec bbbbbbbbbbb .status)" "pending"
+is "...while a SAVED one stays saved" "$(rec aaaaaaaaaaa .status)" "archived"
+is "...and its copy keeps its tag" "$(abx ".snapshots[\"$(yt aaaaaaaaaaa)\"].tags | join(\",\")")" "Guitar"
+is "...silently" "$(titles)" ""
+mk_backup "$GRAYJAY_BACKUP" "Guitar:::${GUITAR}" "$(yt aaaaaaaaaaa)" \
+    -- "How Far Away Is It:::11111111-1111-1111-1111-111111111111" "$(yt bbbbbbbbbbb)"
+age_backup 1
+run_job
+is "an unfinished video whose playlist is unmarked stops being tracked" "$(rec bbbbbbbbbbb .status)" "removed"
 
 echo "staleness"
 fresh
@@ -384,7 +411,7 @@ is "exactly 7 days is not stale yet, so the stale fault recovers" "$(titles)" "B
 # ===================================================================== failures
 echo "failure policy"
 fresh
-mk_backup "$GRAYJAY_BACKUP" "Guitar:::${GUITAR}" "$(yt fffffffffff)" -- "AddisonCore:::${ADDISON}"
+mk_backup "$GRAYJAY_BACKUP" "📦 Guitar:::${GUITAR}" "$(yt fffffffffff)" -- "📦 AddisonCore:::${ADDISON}"
 age_backup 1
 run_job
 abx_snap "$(yt fffffffffff)" sealed "Long Lesson - YouTube" "" failed "Timed out after 7200 seconds"
@@ -422,7 +449,7 @@ NOW=$(( T0 + 8 * DAY )); age_backup 1; abx_reset_calls
 run_job
 is "7 days from the first failure: Abandoned: 1 Video" "$(titles)" "Abandoned: 1 Video"
 has "...with the last reason" "$(bodies)" "Timed out after 2h"
-has "...and how to try again" "$(bodies)" "put it back to try again"
+has "...and how to try again" "$(bodies)" "take it out of its playlist and put it back"
 hasnt "...and no further retry" "$(calls)" "extract"
 is "...recorded abandoned" "$(rec fffffffffff .status)" "abandoned"
 clear_cap; abx_reset_calls
@@ -433,7 +460,7 @@ hasnt "...or handed over again" "$(calls)" "fffffffffff"
 
 echo "a retry that succeeds"
 fresh
-mk_backup "$GRAYJAY_BACKUP" "Guitar:::${GUITAR}" "$(yt ggggggggggg)" -- "AddisonCore:::${ADDISON}"
+mk_backup "$GRAYJAY_BACKUP" "📦 Guitar:::${GUITAR}" "$(yt ggggggggggg)" -- "📦 AddisonCore:::${ADDISON}"
 NOW=$T0; age_backup 1
 run_job
 abx_snap "$(yt ggggggggggg)" sealed "Flaky - YouTube" "" failed "403 Forbidden"
@@ -450,7 +477,7 @@ is "...a receipt: no sequence id" "$(ids)" ""
 
 echo "what counts as a video"
 fresh
-mk_backup "$GRAYJAY_BACKUP" "Guitar:::${GUITAR}" "$(yt hhhhhhhhhhh)" "$(yt iiiiiiiiiii)" "$(yt jjjjjjjjjjj)" -- "AddisonCore:::${ADDISON}"
+mk_backup "$GRAYJAY_BACKUP" "📦 Guitar:::${GUITAR}" "$(yt hhhhhhhhhhh)" "$(yt iiiiiiiiiii)" "$(yt jjjjjjjjjjj)" -- "📦 AddisonCore:::${ADDISON}"
 NOW=$T0; age_backup 1
 run_job
 # A timeout between yt-dlp's two streams leaves a finished video-only .fNNN. file, which
@@ -468,7 +495,7 @@ hasnt "...without the [youtube] <id>: prefix" "$(bodies)" "jjjjjjjjjjj:"
 # directions: "succeeded" holding only an audio stream and a .part is not archived,
 # and "failed" with no message holding a complete merged file IS.
 clear_cap
-mk_backup "$GRAYJAY_BACKUP" "Guitar:::${GUITAR}" "$(yt nnnnnnnnnnn)" "$(yt ooooooooooo)" -- "AddisonCore:::${ADDISON}"
+mk_backup "$GRAYJAY_BACKUP" "📦 Guitar:::${GUITAR}" "$(yt nnnnnnnnnnn)" "$(yt ooooooooooo)" -- "📦 AddisonCore:::${ADDISON}"
 NOW=$T0; age_backup 1
 run_job
 abx_snap "$(yt nnnnnnnnnnn)" sealed "Guitar Cover - YouTube" "" succeeded "ytdlp/Guitar_Cover.f251.webm" "Guitar_Cover.description" "Guitar_Cover.f251.webm" "Guitar_Cover.f299.mp4.part" "Guitar_Cover.info.json"
@@ -484,7 +511,7 @@ has "...as unfinished" "$(bodies)" "Download did not finish"
 
 # Real output from the first live run (2026-10-19): an age-restricted video.
 clear_cap
-mk_backup "$GRAYJAY_BACKUP" "Guitar:::${GUITAR}" "$(yt mmmmmmmmmmm)" -- "AddisonCore:::${ADDISON}"
+mk_backup "$GRAYJAY_BACKUP" "📦 Guitar:::${GUITAR}" "$(yt mmmmmmmmmmm)" -- "📦 AddisonCore:::${ADDISON}"
 NOW=$T0; age_backup 1
 run_job
 abx_snap "$(yt mmmmmmmmmmm)" sealed "Gardening on Salvia - YouTube" "" failed $'yt-dlp error: [youtube] Extracting URL: https://www.youtube.com/watch?v=mmmmmmmmmmm\nERROR: [youtube] mmmmmmmmmmm: Sign in to confirm your age. Use --cookies-from-browser or --cookies for the authentication. See  https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp  for how to manually pass cookies.\n'
@@ -495,7 +522,7 @@ hasnt "...without yt-dlp's cookie advice" "$(bodies)" "cookies"
 
 echo "lost hand-overs"
 fresh
-mk_backup "$GRAYJAY_BACKUP" "Guitar:::${GUITAR}" "$(yt kkkkkkkkkkk)" -- "AddisonCore:::${ADDISON}"
+mk_backup "$GRAYJAY_BACKUP" "📦 Guitar:::${GUITAR}" "$(yt kkkkkkkkkkk)" -- "📦 AddisonCore:::${ADDISON}"
 NOW=$T0; age_backup 1
 run_job
 abx_reset   # ArchiveBox lost the queued snapshot
@@ -510,12 +537,12 @@ has "...and it is handed over again" "$(calls)" "add --bg --tag Guitar --plugins
 
 echo "second tag"
 fresh
-mk_backup "$GRAYJAY_BACKUP" "Guitar:::${GUITAR}" "$(yt lllllllllll)" -- "AddisonCore:::${ADDISON}"
+mk_backup "$GRAYJAY_BACKUP" "📦 Guitar:::${GUITAR}" "$(yt lllllllllll)" -- "📦 AddisonCore:::${ADDISON}"
 NOW=$T0; age_backup 1
 run_job
 abx_snap "$(yt lllllllllll)" sealed "Both - YouTube" "" succeeded "x" "Both.mp4"
 run_job
-mk_backup "$GRAYJAY_BACKUP" "Guitar:::${GUITAR}" "$(yt lllllllllll)" -- "AddisonCore:::${ADDISON}" "$(yt lllllllllll)"
+mk_backup "$GRAYJAY_BACKUP" "📦 Guitar:::${GUITAR}" "$(yt lllllllllll)" -- "📦 AddisonCore:::${ADDISON}" "$(yt lllllllllll)"
 age_backup 1; clear_cap
 run_job
 is "a video added to the second playlist later gets the second tag" \
@@ -526,7 +553,7 @@ hasnt "...without a second hand-over" "$(jq -r '.calls[] | join(" ")' "$FAKE" | 
 
 echo "removal and re-adding (owner, 2026-10-31)"
 fresh
-mk_backup "$GRAYJAY_BACKUP" "Guitar:::${GUITAR}" "$(yt ppppppppppp)" "$(yt qqqqqqqqqqq)" "$(yt rrrrrrrrrrr)" -- "AddisonCore:::${ADDISON}"
+mk_backup "$GRAYJAY_BACKUP" "📦 Guitar:::${GUITAR}" "$(yt ppppppppppp)" "$(yt qqqqqqqqqqq)" "$(yt rrrrrrrrrrr)" -- "📦 AddisonCore:::${ADDISON}"
 NOW=$T0; age_backup 1
 run_job
 abx_snap "$(yt ppppppppppp)" sealed "Keeps Failing - YouTube" "" failed "403 Forbidden"
@@ -536,7 +563,7 @@ run_job
 is "setup: the failing video was Dropped" "$(titles)" "Dropped: 1 Video"
 # qqq is still downloading (queued); ppp is failing; rrr is saved. Remove all three.
 clear_cap; abx_reset_calls
-mk_backup "$GRAYJAY_BACKUP" "Guitar:::${GUITAR}" -- "AddisonCore:::${ADDISON}"
+mk_backup "$GRAYJAY_BACKUP" "📦 Guitar:::${GUITAR}" -- "📦 AddisonCore:::${ADDISON}"
 NOW=$(( T0 + 2 * DAY )); age_backup 1
 run_job; rc=$?
 is "removing videos is silent" "$(titles)" ""
@@ -558,7 +585,7 @@ echo "added back: a fresh start"
 clear_cap; abx_reset_calls
 # Its last retry (queued by the fake) failed again while it was out of the playlist.
 abx_snap "$(yt ppppppppppp)" sealed "Keeps Failing - YouTube" "" failed "403 Forbidden"
-mk_backup "$GRAYJAY_BACKUP" "Guitar:::${GUITAR}" "$(yt ppppppppppp)" -- "AddisonCore:::${ADDISON}"
+mk_backup "$GRAYJAY_BACKUP" "📦 Guitar:::${GUITAR}" "$(yt ppppppppppp)" -- "📦 AddisonCore:::${ADDISON}"
 NOW=$(( T0 + 10 * DAY )); age_backup 1
 run_job
 is "re-adding a removed failing video starts a NEW 7-day clock" \
@@ -574,23 +601,23 @@ is "...and if it then saves, you are told: it had failed before" "$(titles)" "Ar
 
 echo "added back after it saved while out"
 fresh
-mk_backup "$GRAYJAY_BACKUP" "Guitar:::${GUITAR}" "$(yt uuuuuuuuuuu)" -- "AddisonCore:::${ADDISON}"
+mk_backup "$GRAYJAY_BACKUP" "📦 Guitar:::${GUITAR}" "$(yt uuuuuuuuuuu)" -- "📦 AddisonCore:::${ADDISON}"
 NOW=$T0; age_backup 1
 run_job
 abx_snap "$(yt uuuuuuuuuuu)" sealed "Late Bloomer - YouTube" "" failed "403 Forbidden"
 NOW=$(( T0 + DAY )); age_backup 1; run_job
-mk_backup "$GRAYJAY_BACKUP" "Guitar:::${GUITAR}" -- "AddisonCore:::${ADDISON}"
+mk_backup "$GRAYJAY_BACKUP" "📦 Guitar:::${GUITAR}" -- "📦 AddisonCore:::${ADDISON}"
 NOW=$(( T0 + 2 * DAY )); age_backup 1; run_job
 # While out of the playlist, the retry already queued finished and saved it.
 abx_snap "$(yt uuuuuuuuuuu)" sealed "Late Bloomer - YouTube" "" succeeded "x" "Late_Bloomer.mp4"
-mk_backup "$GRAYJAY_BACKUP" "Guitar:::${GUITAR}" "$(yt uuuuuuuuuuu)" -- "AddisonCore:::${ADDISON}"
+mk_backup "$GRAYJAY_BACKUP" "📦 Guitar:::${GUITAR}" "$(yt uuuuuuuuuuu)" -- "📦 AddisonCore:::${ADDISON}"
 NOW=$(( T0 + 3 * DAY )); age_backup 1; clear_cap
 run_job
 is "re-added and found already saved: still told, because it had failed before" "$(titles)" "Archived: Late Bloomer"
 
 echo "re-added after giving up"
 fresh
-mk_backup "$GRAYJAY_BACKUP" "Guitar:::${GUITAR}" "$(yt sssssssssss)" -- "AddisonCore:::${ADDISON}"
+mk_backup "$GRAYJAY_BACKUP" "📦 Guitar:::${GUITAR}" "$(yt sssssssssss)" -- "📦 AddisonCore:::${ADDISON}"
 NOW=$T0; age_backup 1
 run_job
 abx_snap "$(yt sssssssssss)" sealed "Age Gated - YouTube" "" failed "Sign in to confirm your age"
@@ -605,33 +632,109 @@ run_job
 is "a given-up video STILL in the playlist stays given up, silently" "$(rec sssssssssss .status)" "abandoned"
 is "...no message" "$(titles)" ""
 hasnt "...no retry" "$(calls)" "extract"
-mk_backup "$GRAYJAY_BACKUP" "Guitar:::${GUITAR}" -- "AddisonCore:::${ADDISON}"
+mk_backup "$GRAYJAY_BACKUP" "📦 Guitar:::${GUITAR}" -- "📦 AddisonCore:::${ADDISON}"
 NOW=$(( T0 + 11 * DAY )); age_backup 1
 run_job
 is "taking it out marks it removed" "$(rec sssssssssss .status)" "removed"
 abx_snap "$(yt sssssssssss)" sealed "Age Gated - YouTube" "" failed "Sign in to confirm your age"
-mk_backup "$GRAYJAY_BACKUP" "Guitar:::${GUITAR}" "$(yt sssssssssss)" -- "AddisonCore:::${ADDISON}"
+mk_backup "$GRAYJAY_BACKUP" "📦 Guitar:::${GUITAR}" "$(yt sssssssssss)" -- "📦 AddisonCore:::${ADDISON}"
 NOW=$(( T0 + 12 * DAY )); age_backup 1; clear_cap
 run_job
 is "putting it back gives it a fresh start: Dropped again" "$(titles)" "Dropped: 1 Video"
 
 echo "what does NOT count as removed"
 fresh
-mk_backup "$GRAYJAY_BACKUP" "Guitar:::${GUITAR}" "$(yt ttttttttttt)" -- "AddisonCore:::${ADDISON}"
+mk_backup "$GRAYJAY_BACKUP" "📦 Guitar:::${GUITAR}" "$(yt ttttttttttt)" -- "📦 AddisonCore:::${ADDISON}"
 NOW=$T0; age_backup 1
 run_job
 abx_snap "$(yt ttttttttttt)" sealed "Missing Parent - YouTube" "" failed "403 Forbidden"
 NOW=$(( T0 + DAY )); age_backup 1
 run_job
-mk_backup "$GRAYJAY_BACKUP" "AddisonCore:::${ADDISON}"
-NOW=$(( T0 + 2 * DAY )); age_backup 1
-run_job
-is "a video whose whole PLAYLIST went missing is not 'removed'" "$(rec ttttttttttt .status)" "pending"
 printf 'garbage' > "$GRAYJAY_BACKUP"; printf 'garbage' > "${GRAYJAY_BACKUP}.old"
 NOW=$(( T0 + 3 * DAY )); age_backup 1
 run_job
 isnt_removed="$(rec ttttttttttt .status)"
 [[ "$isnt_removed" != "removed" ]] && ok "an UNREADABLE backup removes nothing" || bad "an UNREADABLE backup removes nothing" "not removed" "$isnt_removed"
+
+# ====================================================================== channels
+echo "channels: the Archive subscription group (owner, 2026-11-01)"
+CH="https://www.youtube.com/channel/UCqw9wmv67mZ89PkwOI9IxjA"
+CHID="UCqw9wmv67mZ89PkwOI9IxjA"
+abx_channel() { # <url> <name> <id…> | <url> fail
+    local url="$1"; shift
+    if [[ "$1" == fail ]]; then
+        jq --arg u "$url/videos" '.channels[$u] = "fail"' "$FAKE" > "$FAKE.t"
+    else
+        local name="$1"; shift
+        jq --arg u "$url/videos" --arg n "$name" '.channels[$u] = {name: $n, ids: $ARGS.positional}' --args "$@" < "$FAKE" > "$FAKE.t"
+    fi
+    mv "$FAKE.t" "$FAKE"
+}
+fresh
+abx_channel "$CH" "K's Archives" uuuuuuuuuu1 uuuuuuuuuu2 uuuuuuuuuu3
+abx_channel "https://www.youtube.com/channel/UCzzzzzzzzzzzzzzzzzzzzzz" "Other" vvvvvvvvvvv
+mk_backup "$GRAYJAY_BACKUP" "📦 Guitar:::${GUITAR}" "$(yt uuuuuuuuuu3)" \
+    -- "GROUP:Archive" "$CH" \
+    -- "GROUP:Music" "https://www.youtube.com/channel/UCzzzzzzzzzzzzzzzzzzzzzz"
+NOW=$T0; age_backup 1
+run_job; rc=$?
+c="$(calls)"
+has "every video of a channel in the Archive group is handed over" "$c" "add --bg --tag KsArchives --plugins title,ytdlp $(yt uuuuuuuuuu1) $(yt uuuuuuuuuu2)"
+has "...listed from its Videos tab with ArchiveBox's own yt-dlp" "$c" "--flat-playlist"
+has "...the Videos tab only" "$c" "${CH}/videos"
+has "...tagged with the channel's name, letters and digits only" "$c" "--tag KsArchives"
+has "a video in a marked playlist AND the channel gets both tags, one hand-over" "$c" "add --bg --tag Guitar,KsArchives --plugins title,ytdlp $(yt uuuuuuuuuu3)"
+hasnt "a channel in any OTHER group is ignored" "$c" "vvvvvvvvvvv"
+is "...the record remembers its channel" "$(rec uuuuuuuuuu1 .channel)" "$CHID"
+is "...and a hand-over is silent" "$(titles)" ""
+is "...exit 0" "$rc" "0"
+
+echo "a channel that cannot be listed"
+clear_cap; abx_reset_calls
+abx_channel "$CH" fail
+NOW=$(( T0 + DAY )); age_backup 1
+run_job; rc=$?
+is "a listing that fails: Channel: Unreadable" "$(titles)" "Channel: Unreadable"
+is "...on a per-channel stable id" "$(ids)" "grayjay-channel-${CHID}"
+has "...naming the channel" "$(bodies)" "$CH"
+has "...with yt-dlp's reason" "$(bodies)" "HTTP Error 404"
+is "...its videos are NOT removed on a failed listing" "$(rec uuuuuuuuuu1 .status)" "pending"
+is "...a finding, the run still succeeds" "$rc" "0"
+has "...the journal names it" "$(cat "${TMP}/out" "${TMP}/err")" "channel unreadable: ${CHID}"
+clear_cap
+abx_channel "$CH" "K's Archives" uuuuuuuuuu1 uuuuuuuuuu2 uuuuuuuuuu3
+run_job
+is "listed again: the fault turns into Channel: Readable" "$(titles)" "Channel: Readable"
+
+echo "a video that vanishes from a channel still followed"
+fresh
+abx_channel "$CH" "K's Archives" wwwwwwwwww1 wwwwwwwwww2
+mk_backup "$GRAYJAY_BACKUP" "GROUP:Archive" "$CH"
+NOW=$T0; age_backup 1
+run_job
+abx_snap "$(yt wwwwwwwwww2)" sealed "Gone - YouTube" "" failed "Video unavailable"
+abx_channel "$CH" "K's Archives" wwwwwwwwww1
+NOW=$(( T0 + DAY )); age_backup 1; clear_cap
+run_job
+is "it is NOT let go: it is a failure, so you hear it was lost" "$(titles)" "Dropped: 1 Video"
+is "...and it stays tracked, its retry queued" "$(rec wwwwwwwwww2 .status)" "pending"
+abx_snap "$(yt wwwwwwwwww2)" sealed "Gone - YouTube" "" failed "Video unavailable"
+NOW=$(( T0 + 9 * DAY )); age_backup 1; clear_cap
+run_job
+is "...and after 7 days it is Abandoned like any other" "$(titles)" "Abandoned: 1 Video"
+
+echo "a channel taken out of the group"
+fresh
+abx_channel "$CH" "K's Archives" xxxxxxxxxx1
+mk_backup "$GRAYJAY_BACKUP" "GROUP:Archive" "$CH"
+NOW=$T0; age_backup 1
+run_job
+mk_backup "$GRAYJAY_BACKUP" "GROUP:Archive"
+NOW=$(( T0 + DAY )); age_backup 1; clear_cap; abx_reset_calls
+run_job
+is "its unfinished videos stop being tracked" "$(rec xxxxxxxxxx1 .status)" "removed"
+hasnt "...and it is not listed any more" "$(calls)" "--flat-playlist"
+is "...silently" "$(titles)" ""
 
 # ===================================================================== ArchiveBox
 echo "ArchiveBox unreachable"
@@ -721,12 +824,10 @@ is "titles stay inside the 40-char cap" \
    "$(source "${REPO}/ntfy/kinds.sh"; t="$(title_count Archived 1 Video "A Very Long YouTube Title That Goes On And On Forever")"; echo "${#t}")" "40"
 
 echo "hygiene"
-real="$(source "${SCRIPT_DIR}/grayjay.lib.sh"; printf '%s\n' "${PLAYLISTS[@]}")"
-is "production follows exactly four playlists" "$(wc -l <<<"$real")" "4"
-for t in GuitarCore AddisonCore HowFarAwayIsIt AbsolutelyUnderstandGuitar; do
-    has "...including $t" "$real" "=$t"
-done
-is "...each by a full UUID" "$(grep -cE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}=[A-Za-z]+$' <<<"$real")" "4"
+cfg="$(source "${SCRIPT_DIR}/grayjay.lib.sh"; printf '%s|%s|%s' "$GRAYJAY_MARKER" "$GRAYJAY_GROUP" "$GRAYJAY_YTDLP")"
+is "production follows playlists marked 📦 and the subscription group Archive" "${cfg%|*}" "📦|Archive"
+has "...and lists channels with ArchiveBox's own yt-dlp" "$cfg" "/opt/archivebox/lib/uv/packages/yt-dlp/venv/bin/yt-dlp"
+hasnt "no playlist or channel is named in the code: the phone decides" "$(cat "${SCRIPT_DIR}"/grayjay.lib.sh)" "PLAYLISTS=("
 for s in archive.sh lib.sh archive.py; do
     [[ -x "${SCRIPT_DIR}/grayjay.${s}" ]] && ok "grayjay.${s} is executable" || bad "grayjay.${s} is executable" "+x" "not executable"
 done

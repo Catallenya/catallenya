@@ -69,35 +69,30 @@ publish() { # $1 = path to the JSON report
         done
         title="$(title_count Abandoned "$n" Video)"
         body="$(body_join "$(body_list "${items[@]}")" \
-            "Retried daily for 7 days. Take it out of the playlist and put it back to try again.")"
+            "Retried daily for 7 days. To try again, take it out of its playlist and put it back.")"
         notify_fault "$title" "$body" 2>>"$SEND_ERR"
     fi
 
-    # The three repeating faults below go through fault_open / fault_close (ntfy.lib.sh):
+    # The repeating faults below go through fault_open / fault_close (ntfy.lib.sh):
     # each run says whether the fault is present or absent, and one that clears on its
-    # own — ArchiveBox back, a fresh backup, a playlist found again — turns its message
+    # own — ArchiveBox back, a fresh backup, a channel listed again — turns its message
     # on the phone into the recovery, the same loop the per-video `Archived` closes.
-    # A fault is only CLOSED when this run could actually see the thing: an unreadable
-    # backup says nothing about playlists, so it closes no Missing.
+    # A fault is only CLOSED when this run could actually see the thing.
     local backup_state; backup_state="$(jq -r '.backup.state' "$r")"
 
-    # --- an allow-listed playlist is not in the backup -----------------------------
-    local tag uuid entry
-    declare -A missing_now=()
-    while IFS=$'\t' read -r tag uuid; do
-        [[ -n "$tag" ]] || continue
-        missing_now[$tag]=1
-        title="$(title_state "$tag" Missing)"
-        body="Playlist ${uuid} is not in the latest backup. If it was deleted and made again, put its new id in grayjay/scripts/grayjay.lib.sh."
-        fault_open "${MISSING_NTFY_PREFIX}${tag}" "$title" "$body" 2>>"$SEND_ERR"
-    done < <(jq -r '.missing[] | [.tag, .uuid] | @tsv' "$r")
-    if [[ "$backup_state" != "unreadable" ]]; then
-        for entry in "${PLAYLISTS[@]}"; do
-            tag="${entry#*=}"
-            [[ -n "${missing_now[$tag]:-}" ]] || \
-                fault_close "${MISSING_NTFY_PREFIX}${tag}" Found "The playlist is in the latest backup again." 2>>"$SEND_ERR"
-        done
-    fi
+    # --- a channel in the Archive group whose videos could not be listed -----------
+    # Its videos already tracked are kept as they are (never "removed" on a failed
+    # listing) and it is listed again tomorrow. Closed only when the listing works.
+    local chid url err
+    while IFS=$'\t' read -r chid url err; do
+        [[ -n "$chid" ]] || continue
+        title="$(title_state Channel Unreadable)"
+        body="$(body_join "$(body_fact "$err")" "Could not list the videos of ${url}. Its videos are kept as they are and it is tried again tomorrow.")"
+        fault_open "${CHANNEL_NTFY_PREFIX}${chid}" "$title" "$body" 2>>"$SEND_ERR"
+    done < <(jq -r '.channels[] | select(.state == "unreadable") | [.id, .url, .error] | @tsv' "$r")
+    while IFS= read -r chid; do
+        fault_close "${CHANNEL_NTFY_PREFIX}${chid}" Readable "Its videos are listed again." 2>>"$SEND_ERR"
+    done < <(jq -r '.channels[] | select(.state == "ok") | .id' "$r")
 
     # --- the backup itself: unreadable, or too old ---------------------------------
     local newest age last=""
@@ -153,7 +148,8 @@ main() {
 
     local report rc=0
     report="$(mktemp)"
-    GRAYJAY_PLAYLISTS="${PLAYLISTS[*]}" GRAYJAY_BACKUP="$GRAYJAY_BACKUP" \
+    GRAYJAY_MARKER="$GRAYJAY_MARKER" GRAYJAY_GROUP="$GRAYJAY_GROUP" GRAYJAY_YTDLP="$GRAYJAY_YTDLP" \
+    GRAYJAY_BACKUP="$GRAYJAY_BACKUP" \
     GRAYJAY_STATE="$GRAYJAY_STATE" GRAYJAY_DOCKER="$GRAYJAY_DOCKER" \
         python3 -I "$CORE" > "$report" || rc=$?
     if (( rc != 0 && rc != 2 )) || ! jq -e . "$report" >/dev/null 2>&1; then
@@ -168,7 +164,11 @@ main() {
            + ", \(.dropped|length) dropped, \(.abandoned|length) abandoned"
            + ", \(.adopted) adopted, \(.backfilled // 0) backfilled, \(.pending) pending"
            + ", \(.removed) removed, \(.readded) added back"
-           + ", archivebox \(.archivebox)"' "$report"
+           + ", archivebox \(.archivebox)"
+           + "; following \(.followed | join(" "))"
+           + (if (.channels | map(select(.state != "ok")) | length) > 0 then
+                "; channel unreadable: \(.channels | map(select(.state != "ok") | .id) | join(" "))"
+              else "" end)' "$report"
 
     publish "$report" || rc=1
     rm -f "$report"

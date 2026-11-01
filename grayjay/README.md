@@ -1,12 +1,18 @@
 # grayjay
 
-Keeps a copy of every video in four Grayjay playlists, so a video that disappears from
-YouTube is still watchable.
+Keeps a copy of every video in the Grayjay playlists and channels you choose, so a
+video that disappears from YouTube is still watchable.
 
-Add a video to **GuitarCore**, **AddisonCore**, **How Far Away Is It** or **The ABSOLUTELY
-UNDERSTAND GUITAR VIDEO HOME STUDY PROGRAM** in Grayjay on the phone. Within a day or
-two it is in ArchiveBox, tagged with the playlist's name. Nothing tells you so: the
-`grayjay` topic is **silent unless something fails** (see Decisions below).
+**You choose on the phone, never in this repo:**
+
+- **A playlist** is followed while its name starts with **📦**, e.g. `📦 Guitar`.
+- **A channel** is followed while it is in the Grayjay subscription group **Archive**.
+  Every video on its Videos tab is kept, old and new; Shorts and live streams are not.
+
+Within a day or two each video is in ArchiveBox, tagged with the playlist's or channel's
+name, letters and digits only: `📦 How Far Away Is It` → `HowFarAwayIsIt`,
+`K's Archives` → `KsArchives`. Nothing tells you so: the `grayjay` topic is **silent
+unless something fails** (see Decisions below).
 
 ## How it works
 
@@ -15,38 +21,42 @@ phone: Grayjay auto-backup (every ~2 days, only while the app runs)
    → master/config/GrayjayBackup.ezip  (+ .ezip.old), over Syncthing
 
 grayjay.archive.timer, daily 07:55 SGT
-   → read the allow-listed playlists out of the backup, by UUID
+   → read the 📦 playlists and the Archive group's channels out of the backup
+   → list each channel's Videos tab (ArchiveBox's own yt-dlp, --flat-playlist)
    → each video never seen before → archivebox add --bg --tag <Playlist> --plugins title,ytdlp
    → each video handed over earlier → did a complete video file land?
-   → ntfy, problems only: Dropped / Abandoned / Backup / Missing / Unreachable,
+   → ntfy, problems only: Dropped / Abandoned / Backup / Channel / Unreachable,
      plus Archived for a video that had failed and was later saved
 ```
 
-There is no model, no button and no drop zone. Putting a video in the playlist is the
-whole decision, so everything sent is a receipt or a fault (`ntfy/MESSAGES.md` § 7).
+There is no model, no button and no drop zone. Marking the playlist, or grouping the
+channel, is the whole decision, so everything sent is a receipt or a fault (`ntfy/MESSAGES.md` § 7).
 
 ## Decisions
 
-Settled with the owner on 2026-10-31. Each one is enforced by a case in `tests/run.sh`.
+Settled with the owner on 2026-10-31 and 2026-11-01. Each one is enforced by a case in `tests/run.sh`.
 
 | Situation | What happens |
 |---|---|
 | A video saves | **Nothing is sent.** The phone hears only about problems |
 | A video fails to download | `Dropped` once, silent daily retries, `Abandoned` 7 days after the FIRST failure. Two messages per video, never more |
 | A video that failed later saves | `Archived: <title>`, the one piece of good news, so a failure you were told about is always closed |
-| A system problem lasts days (ArchiveBox down, backup over 7 days old, a playlist missing, backup unreadable) | ONE notification that refreshes itself each morning until fixed: at most one buzz a day, never a pile |
+| A system problem lasts days (ArchiveBox down, backup over 7 days old, a channel that cannot be listed, backup unreadable) | ONE notification that refreshes itself each morning until fixed: at most one buzz a day, never a pile |
 | How often it checks | once a day, 07:55 SGT |
 | A video is taken out of the playlist while unfinished (failing, given up, or still downloading) | It stops being tracked, silently. Nothing in ArchiveBox is touched: a running download finishes on its own and keeps its copy |
 | A saved video is taken out of the playlist | Nothing changes. The copy and its playlist tag stay |
 | A video taken out is added back | A fresh start: a new 7-day clock, so it can be `Dropped` and `Abandoned` again; if it saves, `Archived` (it had failed before) |
 | A given-up video is still in the playlist | It stays given up, silently. Take it out and put it back to retry |
-| A whole playlist goes missing, or the backup cannot be read | Nothing counts as "taken out"; the `Missing` or `Unreadable` fault is sent instead |
+| The 📦 is taken off a playlist, the playlist is deleted, or a channel leaves the Archive group | It stops being followed: the same as taking each of its videos out. Saved copies and their tags stay |
+| A video vanishes from a channel still in the group (deleted, made private) before it was saved | **Not** let go: it is a failure, so `Dropped` then `Abandoned`. That loss is exactly what an archive is for, so you are told |
+| A channel cannot be listed, or the backup cannot be read | Nothing counts as "taken out"; `Channel: Unreadable` or `Backup: Unreadable` is sent instead |
+| A followed playlist or channel is renamed | New videos get the new tag; videos already tagged keep the old one too |
 
 ## Files
 
 | Path | What |
 |---|---|
-| `scripts/grayjay.lib.sh` | settings: the playlist allow-list, paths, vocabulary |
+| `scripts/grayjay.lib.sh` | settings: the 📦 marker, the group name, paths, vocabulary |
 | `scripts/grayjay.archive.sh` | the entry point; turns the report into notifications |
 | `scripts/grayjay.archive.py` | the work: parse the backup, keep the records, judge results |
 | `scripts/grayjay.abx.py` | runs inside the ArchiveBox container: look up snapshots, add tags |
@@ -66,7 +76,7 @@ whole truth about that video:
 | `adopted` | the snapshot existed before this job saw the video AND already holds the video; tagged, never re-downloaded. A snapshot without the video (a page-only bookmark) is not adopted: ytdlp is run on it silently and it becomes `pending` (2026-11-01) |
 | `failed` | the last attempt failed; retried daily without a notification |
 | `abandoned` | still failing 7 days after the FIRST failure; never retried again |
-| `removed` | taken out of every playlist while unfinished; no longer tracked. Put it back for a fresh start |
+| `removed` | no longer followed while unfinished; no longer tracked. Follow it again for a fresh start |
 
 To retry an abandoned video, take it out of the playlist and put it back (or delete its record). To start over completely, delete
 `state/`: every video whose snapshot already holds the video is adopted again, nothing
@@ -74,9 +84,13 @@ is downloaded twice.
 
 ## Things worth knowing
 
-- **Playlists are matched by UUID, not name.** Renaming one changes nothing. Deleting
-  one and making a new one gives a new UUID and a `<Tag>: Missing` fault; put the new
-  UUID in `scripts/grayjay.lib.sh`.
+- **Until 2026-11-01 the playlists were a hand-kept list of UUIDs** in
+  `scripts/grayjay.lib.sh`, so every new playlist meant a change to this repo. The
+  marker and the group replaced it, and the `<Tag>: Missing` fault went with it: a
+  playlist that disappears is now simply no longer followed.
+- **A channel's records remember it** (`channel` in the record). That is what lets a
+  video that vanished from a followed channel be told apart from one you stopped
+  following.
 - **URLs are rewritten to `https://www.youtube.com/watch?v=<id>`** before ArchiveBox
   sees them. Shared links carry `?si=` tracking, and one in the live backup carried
   `&list=RD…&start_radio=1`; ArchiveBox runs yt-dlp with `--yes-playlist`, so that link
