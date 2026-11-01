@@ -104,8 +104,10 @@ if cmd[:1] == ["add"]:
 if cmd[:1] == ["extract"]:
     for sid in cmd[1:]:
         for s in snaps.values():
-            if s["id"] == sid and s["ytdlp"]:
-                s["ytdlp"]["status"] = "queued"
+            if s["id"] == sid:
+                # A snapshot that never ran ytdlp (a page-only bookmark) gets a fresh result.
+                s["ytdlp"] = dict(s["ytdlp"] or {"output": "", "notes": "", "files": []},
+                                  status="queued")
     done()
 print("fake docker: unexpected " + " ".join(args), file=sys.stderr)
 done(99)
@@ -226,7 +228,7 @@ standard_backup() {
 echo "backfill"
 fresh
 standard_backup
-abx_snap "$(yt ccccccccccc)" sealed "Old Favourite - YouTube" "Random"
+abx_snap "$(yt ccccccccccc)" sealed "Old Favourite - YouTube" "Random" succeeded "" "Old_Favourite.mp4"
 run_job; rc=$?
 is "a first run exits 0" "$rc" "0"
 is "...and is silent: a hand-over is not news" "$(titles)" ""
@@ -244,6 +246,50 @@ is "...and gains the playlist tag add --tag could never give it" "$(abx ".snapsh
 is "handed-over videos are recorded pending" "$(rec bbbbbbbbbbb .status)" "pending"
 is "four records, one per video" "$(find "$GRAYJAY_STATE/videos" -name '*.json' | wc -l)" "4"
 has "the journal line counts the run" "$(cat "${TMP}/out")" "3 handed over"
+
+hasnt "...and an adopted snapshot that holds the video is never re-downloaded" "$(calls)" " extract "
+
+echo "adopting a snapshot WITHOUT the video (live 2026-11-01)"
+# Two playlist videos had been saved as 2025 bookmarks: the web page, no video. Adoption
+# used to count that as done. Now it is downloaded, on the same snapshot, silently.
+fresh
+standard_backup
+abx_snap "$(yt ccccccccccc)" sealed "Page Only - YouTube" "Random"
+run_job
+is "a page-only snapshot is NOT adopted" "$(rec ccccccccccc .status)" "pending"
+c="$(calls)"
+has "...ytdlp is run on that same snapshot" "$c" "extract --plugins ytdlp --no-wait $(abx ".snapshots[\"$(yt ccccccccccc)\"].id")"
+hasnt "...it is never handed over as a second snapshot" "$c" "add --bg --tag AddisonCore --plugins title,ytdlp $(yt ccccccccccc)"
+is "...and it is silent: no failure was ever announced" "$(titles)" ""
+is "...it keeps its old tag and gains the playlist's" "$(abx ".snapshots[\"$(yt ccccccccccc)\"].tags | join(\",\")")" "Random,AddisonCore"
+has "the journal line counts it as backfilled" "$(cat "${TMP}/out" "${TMP}/err")" "1 backfilled"
+has "...and not as a retry of something that failed" "$(cat "${TMP}/out" "${TMP}/err")" "0 retried"
+is "...no failure clock was started" "$(rec ccccccccccc .first_failed_at)" "null"
+abx_snap "$(yt ccccccccccc)" sealed "Page Only - YouTube" "" succeeded "" "Page_Only.webm"
+clear_cap
+run_job
+is "when the download lands, it is archived" "$(rec ccccccccccc .status)" "archived"
+is "...silently, because you were never told it failed" "$(titles)" ""
+
+fresh
+standard_backup
+abx_snap "$(yt ccccccccccc)" sealed "Page Only - YouTube" "Random"
+run_job
+abx_snap "$(yt ccccccccccc)" sealed "Page Only - YouTube" "" failed "Sign in to confirm your age"
+NOW=$((T0 + DAY)); run_job; NOW=$T0
+has "a backfill that then FAILS is announced like any other failure" "$(titles)" "Dropped"
+
+echo "a record adopted before this rule is re-checked"
+fresh
+standard_backup
+abx_snap "$(yt ccccccccccc)" sealed "Page Only - YouTube" "Random"
+mkdir -p "$GRAYJAY_STATE/videos"
+printf '{"key":"ccccccccccc","url":"%s","alt":[],"tags":["AddisonCore"],"status":"adopted","snapshot_id":"%s","title":"Page Only","first_seen_at":%s}\n' \
+    "$(yt ccccccccccc)" "$(abx ".snapshots[\"$(yt ccccccccccc)\"].id")" "$T0" > "$GRAYJAY_STATE/videos/ccccccccccc.json"
+run_job
+is "an old adopted record with no video becomes pending" "$(rec ccccccccccc .status)" "pending"
+has "...and ytdlp is asked for it" "$(calls)" "extract --plugins ytdlp --no-wait"
+is "...silently" "$(titles)" ""
 
 echo "second run, nothing new"
 abx_reset_calls() { jq '.calls = []' "$FAKE" > "$FAKE.t" && mv "$FAKE.t" "$FAKE"; }

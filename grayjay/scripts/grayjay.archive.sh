@@ -166,7 +166,7 @@ main() {
     jq -r '"grayjay: backup \(.backup.state)\(if .backup.used == "old" then " (from .old)" else "" end)"
            + ", \(.handed) handed over, \(.retried) retried, \(.archived|length) archived"
            + ", \(.dropped|length) dropped, \(.abandoned|length) abandoned"
-           + ", \(.adopted) adopted, \(.pending) pending"
+           + ", \(.adopted) adopted, \(.backfilled // 0) backfilled, \(.pending) pending"
            + ", \(.removed) removed, \(.readded) added back"
            + ", archivebox \(.archivebox)"' "$report"
 

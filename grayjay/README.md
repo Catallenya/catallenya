@@ -63,14 +63,14 @@ whole truth about that video:
 |---|---|
 | `pending` | handed to ArchiveBox; the download has not finished |
 | `archived` | a complete video file is in its snapshot |
-| `adopted` | the snapshot existed before this job saw the video; tagged, never re-downloaded |
+| `adopted` | the snapshot existed before this job saw the video AND already holds the video; tagged, never re-downloaded. A snapshot without the video (a page-only bookmark) is not adopted: ytdlp is run on it silently and it becomes `pending` (2026-11-01) |
 | `failed` | the last attempt failed; retried daily without a notification |
 | `abandoned` | still failing 7 days after the FIRST failure; never retried again |
 | `removed` | taken out of every playlist while unfinished; no longer tracked. Put it back for a fresh start |
 
 To retry an abandoned video, take it out of the playlist and put it back (or delete its record). To start over completely, delete
-`state/`: every video that already has a snapshot is adopted again, nothing is
-downloaded twice.
+`state/`: every video whose snapshot already holds the video is adopted again, nothing
+is downloaded twice.
 
 ## Things worth knowing
 

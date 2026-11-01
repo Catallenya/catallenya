@@ -15,8 +15,8 @@ checksum of the last backup, no list of what was sent. A video whose record exis
 been dealt with; the record says how.
 
     pending    handed to ArchiveBox, result not in yet
-    archived   a complete video file is in its snapshot             (receipt sent)
-    adopted    the snapshot already existed before this job saw it  (silent)
+    archived   a complete video file is in its snapshot             (silent unless it had failed)
+    adopted    the snapshot already existed WITH the video          (silent)
     failed     the last attempt failed; retried daily, quietly
     abandoned  failing 7 days from the FIRST failure                (fault sent)
     removed    taken out of every playlist while unfinished; no longer tracked (silent)
@@ -323,6 +323,32 @@ def verdict(f):
     return "failed", reason(y)
 
 
+def backfill(rec, f, to_retry, report):
+    """An existing snapshot WITHOUT the video is not adopted: it is downloaded.
+
+    Found live on 2026-11-01: two playlist videos had been saved as 2025 bookmarks, which
+    kept the web page and no video, and adoption counted them done. Now a snapshot is
+    adopted only if it already holds a complete video. Otherwise ytdlp is run on that same
+    snapshot (no second snapshot, the tags stay), silently, and the record becomes an
+    ordinary pending one: it is announced only if that download then fails, like any other.
+    Records adopted before this rule are re-checked the same way. Returns True when the
+    record was taken over.
+    """
+    state, _ = verdict(f)
+    if state in ("archived", "absent"):
+        return False
+    rec["status"] = "pending"
+    rec["first_failed_at"] = None
+    rec["handed_over_at"] = NOW
+    rec["backfilled_at"] = NOW
+    if state == "failed":
+        to_retry.append(rec)   # the hand-over loop saves it and counts it
+    else:
+        save(rec)              # a download is already running on it; just wait
+    report["backfilled"] += 1
+    return True
+
+
 def clean_title(t, fallback):
     t = (t or "").strip()
     t = re.sub(r"\s+-\s+YouTube$", "", t)
@@ -333,7 +359,8 @@ def clean_title(t, fallback):
 def main():
     report = {"backup": {}, "missing": [], "archivebox": "ok", "archivebox_error": "",
               "archived": [], "dropped": [], "abandoned": [], "handed": 0,
-              "retried": 0, "adopted": 0, "pending": 0, "removed": 0, "readded": 0}
+              "retried": 0, "adopted": 0, "backfilled": 0, "pending": 0, "removed": 0,
+              "readded": 0}
 
     playlists, used, newest = read_backup()
     report["backup"] = {
@@ -411,13 +438,15 @@ def main():
         if rec is None:
             if f.get("exists"):
                 # Archived before this job saw it — by hand, or by the 2025 bookmarks.
-                # Adopted as it is: tagged (above), never re-downloaded, never announced.
+                # Tagged (above) and never announced. Adopted as it is only when it
+                # already holds the video; otherwise see backfill() below.
                 rec = {"key": k, "url": it["url"], "alt": it["alt"], "tags": it["tags"],
                        "status": "adopted", "snapshot_id": f.get("id"),
                        "title": clean_title(f.get("title"), it["url"]),
                        "first_seen_at": NOW}
-                save(rec)
-                report["adopted"] += 1
+                if not backfill(rec, f, to_retry, report):
+                    save(rec)
+                    report["adopted"] += 1
             else:
                 rec = {"key": k, "url": it["url"], "alt": it["alt"], "tags": it["tags"],
                        "status": "new", "first_seen_at": NOW, "first_failed_at": None}
@@ -440,6 +469,9 @@ def main():
                 save(rec)
                 to_add.setdefault(tuple(rec["tags"]), []).append(rec)
                 continue
+        if rec["status"] == "adopted" and f.get("exists"):
+            if backfill(rec, f, to_retry, report):
+                continue   # judged tomorrow, like any fresh hand-over
         if rec["status"] not in ("pending", "failed"):
             save(rec)
             continue
@@ -500,7 +532,7 @@ def main():
             for r in to_retry:
                 r["status"] = "pending"
                 save(r)
-            report["retried"] += len(to_retry)
+            report["retried"] += sum(1 for r in to_retry if r.get("backfilled_at") != NOW)
     except Unreachable as e:
         # Nothing new is recorded for what did not go over, so tomorrow tries again.
         report["archivebox"] = "unreachable"
