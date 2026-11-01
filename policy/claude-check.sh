@@ -57,6 +57,20 @@ else
   grep -qiE 'not available|disabled|bypass' <<<"$out" && bypass=PASS
 fi
 
+# Check 6, done outside the model: no settings.local.json may carry an allow rule.
+# An "always allow" click in the app writes one there, outside the settings.json
+# this check reads; a Bash(docker compose *) sat in $REPO's copy from 2026-10-17 to
+# 2026-11-01 unseen. Empty or missing files pass; unreadable or invalid JSON fails.
+localallow=PASS localwhy=
+for f in "$HOME/.claude/settings.local.json" "$REPO/.claude/settings.local.json"; do
+  [[ -e "$f" && -s "$f" ]] || continue
+  if ! n=$(jq -r '(.permissions.allow // []) | length' "$f" 2>/dev/null); then
+    localallow=FAIL localwhy="${localwhy:+$localwhy; }${f/#$HOME/\~} unreadable"
+  elif (( n > 0 )); then
+    localallow=FAIL localwhy="${localwhy:+$localwhy; }${f/#$HOME/\~} has $n"
+  fi
+done
+
 TODAY=$(date -u +%F)
 SINCE=$(date -u -d '30 days ago' +%F)
 
@@ -147,9 +161,11 @@ pass=${BASH_REMATCH[1]} total=${BASH_REMATCH[2]} fails=${BASH_REMATCH[4]}
 [[ "$unused" =~ ^UNUSED\ [0-9]+ && "$secrets" =~ ^SECRETS\ [0-9]+ && "$unusual" =~ ^UNUSUAL\ [0-9]+ ]] \
   || fail4 "incomplete answer"
 
-# Fold in the bypass check.
+# Fold in the bypass and local-allow checks.
 total=$((total + 1))
 if [[ $bypass == PASS ]]; then pass=$((pass + 1)); else fails=${fails:+$fails, }bypass; fi
+total=$((total + 1))
+if [[ $localallow == PASS ]]; then pass=$((pass + 1)); else fails="${fails:+$fails, }localallow [$localwhy]"; fi
 locks="LOCKS $pass/$total${fails:+ FAIL: $fails}"
 
 printf '%s\n%s\n%s\n%s\n' "$locks" "$unused" "$secrets" "$unusual"
