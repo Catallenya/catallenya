@@ -27,7 +27,7 @@ NTFY_VERBS=(Archived Dropped Abandoned)
 # shellcheck disable=SC2034  # consumed by systemd/contract.sh
 NTFY_NOUNS=(Video)
 # shellcheck disable=SC2034  # consumed by systemd/contract.sh
-NTFY_SUBJECTS=(Backup ArchiveBox Guitar AddisonCore HowFarAwayIsIt AbsolutelyUnderstandGuitar)
+NTFY_SUBJECTS=(Backup ArchiveBox GuitarCore AddisonCore HowFarAwayIsIt AbsolutelyUnderstandGuitar)
 
 NTFY_TOPIC="grayjay"
 
@@ -36,7 +36,7 @@ NTFY_TOPIC="grayjay"
 # one with the same name DOES change the UUID, and the job then says `<Tag>: Missing`
 # rather than guessing — put the new UUID here. The tag is what ArchiveBox shows.
 PLAYLISTS=(
-    "a359d200-8781-409e-b76a-ba0b6c3e58d5=Guitar"
+    "a359d200-8781-409e-b76a-ba0b6c3e58d5=GuitarCore"   # was the Guitar tag until 2026-11-01
     "e46f4674-39b9-4d51-aee0-3b38758ac332=AddisonCore"
     # Added 2026-10-31, IDs read from that day's backup and confirmed by the owner.
     "442d205f-a3e0-458d-b835-58ac3d4284fc=HowFarAwayIsIt"

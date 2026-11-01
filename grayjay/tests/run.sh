@@ -723,7 +723,7 @@ is "titles stay inside the 40-char cap" \
 echo "hygiene"
 real="$(source "${SCRIPT_DIR}/grayjay.lib.sh"; printf '%s\n' "${PLAYLISTS[@]}")"
 is "production follows exactly four playlists" "$(wc -l <<<"$real")" "4"
-for t in Guitar AddisonCore HowFarAwayIsIt AbsolutelyUnderstandGuitar; do
+for t in GuitarCore AddisonCore HowFarAwayIsIt AbsolutelyUnderstandGuitar; do
     has "...including $t" "$real" "=$t"
 done
 is "...each by a full UUID" "$(grep -cE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}=[A-Za-z]+$' <<<"$real")" "4"

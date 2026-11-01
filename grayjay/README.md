@@ -3,7 +3,7 @@
 Keeps a copy of every video in four Grayjay playlists, so a video that disappears from
 YouTube is still watchable.
 
-Add a video to **Guitar**, **AddisonCore**, **How Far Away Is It** or **The ABSOLUTELY
+Add a video to **GuitarCore**, **AddisonCore**, **How Far Away Is It** or **The ABSOLUTELY
 UNDERSTAND GUITAR VIDEO HOME STUDY PROGRAM** in Grayjay on the phone. Within a day or
 two it is in ArchiveBox, tagged with the playlist's name. Nothing tells you so: the
 `grayjay` topic is **silent unless something fails** (see Decisions below).

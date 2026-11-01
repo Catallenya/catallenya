@@ -675,16 +675,16 @@ failed (`Dropped` or `Abandoned`) that saves after all: it closes its own loop w
 | still failing 7 days from that first failure | fault | `Abandoned: 1 Video` |
 | neither backup file opens | fault, id `grayjay-backup` | `Backup: Unreadable` |
 | newest backup older than 7 days | fault, id `grayjay-backup` | `Backup: 8 Days Old` |
-| an allow-listed playlist UUID is absent | fault, id `grayjay-missing-<Tag>` | `Guitar: Missing` |
+| an allow-listed playlist UUID is absent | fault, id `grayjay-missing-<Tag>` | `GuitarCore: Missing` |
 | ArchiveBox could not be asked, or refused `add` | fault, id `grayjay-archivebox` | `ArchiveBox: Unreachable` |
 | ArchiveBox answers again | recovery, same id | `ArchiveBox: Reachable` |
 | the backup opens and is fresh again | recovery, id `grayjay-backup` | `Backup: Current` |
-| a missing playlist is back | recovery, id `grayjay-missing-<Tag>` | `Guitar: Found` |
+| a missing playlist is back | recovery, id `grayjay-missing-<Tag>` | `GuitarCore: Found` |
 
 `Dropped` is liquidroom's word reused, because the situation is the same one: a
 download failed. Between the first failure and day 7 the video is retried daily in
 SILENCE, so `Dropped` is said exactly once per video. A receipt's detail is the tag
-(`Tag: Guitar`); a fault's is the reason, compact and without a stop
+(`Tag: GuitarCore`); a fault's is the reason, compact and without a stop
 (`Timed out after 2h`). Unreadable and stale share one id because they are two states
 of one subject and only the newest is worth keeping. Already-archived videos, a video
 in both playlists, an unchanged backup, a video that saves normally, and a video taken
