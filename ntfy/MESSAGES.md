@@ -560,6 +560,7 @@ happened to make the call, since the state they compare is shared. Built with
 | needs-human untouched 24h | `Still Flagged: Kene [1d]` · **Discard** |
 | proposal untouched 24h | `Kene [1d]` |
 | strays the `*.png` glob can't see | `Stranded: 3 Files` |
+| a HEIC photo that will not decode | `Stranded: 1 Screenshot` |
 | anything parked | `Model Paused: 2 Screenshots [Unpaid]` |
 
 ### pigeonhole — topic `pigeonhole`

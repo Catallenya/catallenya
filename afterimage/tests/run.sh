@@ -57,14 +57,15 @@ for fn in log die _load_env hdr_safe notify retract paused_sync archive_record c
           diff_axis event_is_past parked_ids parked_reason ai_reason \
           api_class api_post ai_build_request ai_extract \
           clean_proposal validate_proposal md_escape triage_route write_context add_usage \
-          fork_record fan_out_records memory_remember memory_link memory_render; do
+          fork_record fan_out_records memory_remember memory_link memory_render \
+          is_heic heic_to_jpeg; do
     declare -F "$fn" >/dev/null && ok "$fn defined" || bad "$fn defined" "a function" "missing"
 done
 
 # And that the scripts only call helpers that exist.
 for src in "${SCRIPT_DIR}/afterimage.triage.sh" "${SCRIPT_DIR}/afterimage.sweep.sh"; do
     missing=""
-    for fn in $(grep -ohE '\b(log|die|notify|retract|paused_sync|archive_record|capture_base_url|image_mime|image_ext|button_label|safe_label|capture_actions|record_actions|diff_axis|event_is_past|parked_ids|parked_reason|ai_reason|api_post|ai_build_request|ai_extract|clean_proposal|validate_proposal|md_escape|triage_route|write_context|add_usage|fork_record|fan_out_records)\b' "$src" | sort -u); do
+    for fn in $(grep -ohE '\b(log|die|notify|retract|paused_sync|archive_record|capture_base_url|image_mime|image_ext|button_label|safe_label|capture_actions|record_actions|diff_axis|event_is_past|parked_ids|parked_reason|ai_reason|api_post|ai_build_request|ai_extract|clean_proposal|validate_proposal|md_escape|triage_route|write_context|add_usage|fork_record|fan_out_records|is_heic|heic_to_jpeg)\b' "$src" | sort -u); do
         declare -F "$fn" >/dev/null || missing="${missing} ${fn}"
     done
     [[ -z "$missing" ]] && ok "$(basename "$src") calls only defined helpers" \
@@ -1087,6 +1088,71 @@ stray_check() { # $1 = filename $2 = age -> reported | quiet
 }
 is "an old non-png in incoming/ is reported" "$(stray_check stray.jpeg '2 hours ago')" "reported"
 is "a fresh upload-in-progress is not"       "$(stray_check .part-x 'now')"           "quiet"
+
+# ----------------------------------------------------------------- HEIC photos
+echo "HEIC camera photos"
+
+# The API takes no HEIC, so a camera photo must be JPEG before the request is built.
+# There is no HEVC encoder on this box to make a real fixture, so libheif's AV1
+# encoder writes a HEIF and the major brand is stamped to `heic`: libheif picks its
+# decoder from the image item, not the brand, so this exercises the same delegate
+# path a phone's HEIC takes. A missing encoder FAILS the cases rather than skipping
+# them — the triage depends on the same library.
+HEIC_TMP="$(mktemp -d)"
+mkheic() { # $1 = out $2 = width $3 = height
+    python3 -I - "$@" <<'PY' && printf 'heic' | dd of="$1" bs=1 seek=8 conv=notrunc 2>/dev/null
+import ctypes as C, sys
+h = C.CDLL("libheif.so.1")
+class Err(C.Structure): _fields_ = [("code", C.c_int), ("subcode", C.c_int), ("message", C.c_char_p)]
+for f in ("heif_init", "heif_context_get_encoder_for_format", "heif_image_create",
+          "heif_image_add_plane", "heif_context_encode_image", "heif_context_write_to_file"):
+    getattr(h, f).restype = Err
+h.heif_context_alloc.restype = C.c_void_p
+h.heif_image_get_plane.restype = C.POINTER(C.c_uint8)
+out, W, H = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
+h.heif_init(None)
+ctx, enc, img, stride = C.c_void_p(h.heif_context_alloc()), C.c_void_p(), C.c_void_p(), C.c_int()
+assert h.heif_context_get_encoder_for_format(ctx, 4, C.byref(enc)).code == 0   # 4 = AV1
+assert h.heif_image_create(W, H, 1, 10, C.byref(img)).code == 0                 # RGB, interleaved
+assert h.heif_image_add_plane(img, 10, W, H, 8).code == 0
+p = h.heif_image_get_plane(img, 10, C.byref(stride))
+for y in range(H):
+    for x in range(W * 3): p[y * stride.value + x] = (x * 7 + y * 3) & 0xff
+assert h.heif_context_encode_image(ctx, img, enc, None, None).code == 0
+assert h.heif_context_write_to_file(ctx, out.encode()).code == 0
+PY
+}
+mkheic "${HEIC_TMP}/small.heic" 64 48 && mkheic "${HEIC_TMP}/big.heic" 3000 1000 \
+    && ok "HEIC fixtures built" || bad "HEIC fixtures built" "libheif AV1 encoder" "unavailable"
+
+brand() { # $1 = 4-char brand -> is_heic verdict for a minimal ftyp header
+    printf '\0\0\0\x18ftyp%s\0\0\0\0' "$1" > "${HEIC_TMP}/hdr"
+    is_heic "${HEIC_TMP}/hdr" && echo heic || echo other
+}
+is "an iPhone photo (heic) is HEIC"      "$(brand heic)" "heic"
+is "a generic HEIF (mif1) is HEIC"        "$(brand mif1)" "heic"
+# AVIF shares the container; matching it would hand ImageMagick a format nobody
+# asked this pipeline to take.
+is "an AVIF is not"                       "$(brand avif)" "other"
+is "a stamped fixture is HEIC"            "$(is_heic "${HEIC_TMP}/small.heic" && echo heic || echo other)" "heic"
+printf '\x89PNG\r\n\x1a\n' > "${HEIC_TMP}/p"; printf '\xff\xd8\xff\xe1' > "${HEIC_TMP}/j"
+is "a PNG is not"  "$(is_heic "${HEIC_TMP}/p" && echo heic || echo other)" "other"
+is "a JPEG is not" "$(is_heic "${HEIC_TMP}/j" && echo heic || echo other)" "other"
+
+# The conversion is judged by what the API layer will SAY it is: image_mime sniffs the
+# bytes, and anything it does not recognise goes out labelled image/png.
+heic_to_jpeg "${HEIC_TMP}/small.heic" "${HEIC_TMP}/small.jpg"
+is "HEIC converts to bytes image_mime calls JPEG" "$(image_mime "${HEIC_TMP}/small.jpg")" "image/jpeg"
+is "a small photo keeps its size" "$(identify -format '%wx%h' "${HEIC_TMP}/small.jpg" 2>&1)" "64x48"
+heic_to_jpeg "${HEIC_TMP}/big.heic" "${HEIC_TMP}/big.jpg"
+is "a large photo is capped at 2576 px, aspect kept" \
+   "$(identify -format '%wx%h' "${HEIC_TMP}/big.jpg" 2>&1)" "2576x859"
+# Bytes that claim HEIC but are not must fail, so the triage resolves the record
+# instead of spending an API call on them.
+printf '\0\0\0\x18ftypheic\0\0\0\0garbage' > "${HEIC_TMP}/bad.heic"
+heic_to_jpeg "${HEIC_TMP}/bad.heic" "${HEIC_TMP}/bad.jpg" 2>/dev/null; rc=$?
+isnt "an undecodable HEIC fails" "$rc" "0"
+rm -rf "$HEIC_TMP"
 
 # -------------------------------------------------------------- shared AI layer
 # The transport lives in ai/scripts/ai.lib.sh now, shared with pigeonhole, and

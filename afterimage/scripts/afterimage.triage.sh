@@ -354,6 +354,7 @@ for png in "${pngs[@]}"; do
     # labelled dataset material — a JPEG called .png would mislead anything that
     # trusts extensions. afterimage.sweep.sh globs screenshot.* for the same reason.
     ext="$(image_ext "$png")"
+    is_heic "$png" && ext=heic
     if ! mkdir -p "$rec" || ! mv -f "$png" "${rec}/screenshot.${ext}"; then
         log "  !! cannot claim ${id:0:8} into pending/ — leaving it and skipping"
         # Counted, because this is the one failure the run cannot even record: the
@@ -373,6 +374,24 @@ for png in "${pngs[@]}"; do
         continue
     fi
     png="${rec}/screenshot.${ext}"
+    # A camera photo arrives as HEIC, which the API refuses. Convert it to JPEG and
+    # keep ONLY the JPEG: the sweep re-queues a parked record by moving the first
+    # screenshot.* back to incoming/, so two candidates would let it pick the HEIC
+    # and convert it again on every retry. A photo that will not decode is resolved
+    # here, before an API call is spent on bytes nobody can read.
+    if [[ "$ext" == heic ]]; then
+        if heic_to_jpeg "$png" "${rec}/screenshot.jpg" && rm -f "$png"; then
+            png="${rec}/screenshot.jpg"
+        else
+            rm -f "${rec}/screenshot.jpg"
+            FAILED=$((FAILED + 1))
+            archive_record "$id" "$rec" failed "HEIC photo could not be converted"
+            notify_fault "$(title_count Stranded 1 Screenshot)" \
+                   "$(body_join "$(body_list "${id:0:8}")" \
+                       "That HEIC photo could not be decoded. Export it as JPEG and send it again.")"
+            continue
+        fi
+    fi
     # Before write_context, so the record names the model actually asked. Once per
     # run (guarded), in this shell rather than inside ask()'s subshell.
     ai_resolve_model

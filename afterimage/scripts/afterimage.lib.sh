@@ -186,6 +186,27 @@ HHMM_RE='^([01][0-9]|2[0-3]):[0-5][0-9]$'
 # is left in pending/ without a proposal.json and the sweep re-queues the screenshot
 # once before giving up.
 
+# is_heic <file> — true for a HEIC/HEIF image, by content. Camera photos from an
+# iPhone (and Android phones set to "high efficiency") are HEIC, which the API does
+# not accept, so the triage converts them before anything else reads the record.
+# The format is an ISO-BMFF box: bytes 4-7 are `ftyp`, 8-11 the major brand. AVIF
+# shares the container under its own brands and is deliberately not matched here.
+is_heic() {
+    case "$(LC_ALL=C head -c 12 "$1" 2>/dev/null | tail -c 8)" in
+        ftypheic|ftypheix|ftypheim|ftypheis|ftyphevc|ftyphevx|ftypmif1|ftypmsf1) return 0 ;;
+    esac
+    return 1
+}
+
+# heic_to_jpeg <in> <out> — decode via ImageMagick's libheif delegate. -auto-orient
+# bakes the camera's rotation into the pixels, since the JPEG carries no orientation
+# the model would honour. The resize only ever shrinks: a 12 MP photo at full size
+# lands near the API's 5 MB per-image ceiling, and nothing on a poster or a sign
+# needs more than 2576 px on its long edge to be read.
+heic_to_jpeg() {
+    convert "$1" -auto-orient -resize '2576x2576>' -quality 90 "jpeg:$2"
+}
+
 # diff_axis <this-event-json> <other-event-json> -> year|date|time|venue|none
 # Which single thing distinguishes two ways of attending the same event. Both the
 # button labels and the notification body read this, so they can never disagree

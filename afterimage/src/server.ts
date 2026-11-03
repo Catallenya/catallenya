@@ -187,6 +187,13 @@ const PNG_SIG = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]; // the macOS c
 // SOI + marker only: the fourth byte varies by variant (e0 = JFIF, e1 = Exif,
 // which is what ColorOS emits), so matching four would reject real screenshots.
 const JPEG_SIG = [0xff, 0xd8, 0xff];      // Android screenshots are JPEG, not PNG
+// Camera photos: an ISO-BMFF `ftyp` box at offset 4 with a HEIF image brand at 8.
+// The bytes are spooled as-is; the host triage converts them to JPEG, because the
+// API refuses HEIC and this container has no decoder (and should not grow one).
+const HEIC_BRANDS = new Set(["heic", "heix", "heim", "heis", "hevc", "hevx", "mif1", "msf1"]);
+const isHeic = (b: Uint8Array) =>
+  b.length >= 12 && new TextDecoder().decode(b.subarray(4, 8)) === "ftyp" &&
+  HEIC_BRANDS.has(new TextDecoder().decode(b.subarray(8, 12)));
 const MAX_BYTES = 15 * 1024 * 1024;
 
 for (const d of ["incoming", "pending", "archive"]) {
@@ -226,15 +233,17 @@ async function handleUpload(req: Request): Promise<Response> {
   const buf = new Uint8Array(await req.arrayBuffer());
   if (buf.length === 0 || buf.length > MAX_BYTES) return json({ error: "bad size" }, 413);
   const sigOk = (sig: number[]) => sig.every((b, i) => buf[i] === b);
-  if (!sigOk(PNG_SIG) && !sigOk(JPEG_SIG)) return json({ error: "not a png or jpeg" }, 415);
+  if (!sigOk(PNG_SIG) && !sigOk(JPEG_SIG) && !isHeic(buf)) {
+    return json({ error: "not a png, jpeg or heic" }, 415);
+  }
   const id = crypto.randomUUID();
   // Write under a name the .path unit's glob (*.png) does NOT match, then rename.
   // rename(2) is atomic within a filesystem, so systemd only ever sees a complete
   // file — otherwise PathExistsGlob can fire mid-write and the triage reads a
   // truncated image, burning an API call on a corrupt one.
   //
-  // The `.png` here is a QUEUE TOKEN, not a claim about the bytes: a JPEG upload
-  // also lands as <id>.png. afterimage.triage.path lives in /etc/systemd/system and
+  // The `.png` here is a QUEUE TOKEN, not a claim about the bytes: a JPEG or HEIC
+  // upload also lands as <id>.png. afterimage.triage.path lives in /etc/systemd/system and
   // globs *.png, and changing a root-owned unit needs a password this service
   // does not have — so the spool name stays fixed and the triage sniffs the
   // actual format, naming the archived copy honestly.

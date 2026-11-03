@@ -8,7 +8,9 @@ afterimage reads a screenshot, proposes the calendar events it describes, and
 writes the approved ones to a private calendar server.
 
 - A screenshot uploaded from a laptop hotkey or a phone is triaged the moment it
-  lands. Nothing is scheduled and nothing is polled.
+  lands. Nothing is scheduled and nothing is polled. PNG, JPEG and HEIC (a phone
+  camera's photo of a poster or a sign) are accepted; HEIC is converted to JPEG on
+  arrival, because the model's API does not read it.
 - A vision model extracts the event details: title, date, time, location, the link
   to join an online meeting, and any alternative occasions the image offers.
 - One image can describe several events. Each becomes its own proposal with its
