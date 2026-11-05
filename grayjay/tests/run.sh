@@ -82,6 +82,7 @@ if "--flat-playlist" in cmd:
     done()
 if cmd[:3] == ["manage", "shell", "-c"]:
     req = json.loads(os.environ.get("GJ_REQ") or "{}")
+    db["asked"] = [it["key"] for it in req["items"]]
     out = {}
     for it in req["items"]:
         u = find(it["url"], it.get("alt", []))
@@ -328,15 +329,17 @@ is "a junk tail after the zip is cut away (Grayjay overwrites without truncating
 has "...and the playlist inside is read" "$(calls)" "$(yt aaaaaaaaaaa)"
 hasnt "...the OLD archive's playlist in the tail is not" "$(calls)" "zzzzzzzzzzz"
 
+# The NEWEST backup only (owner, 2026-11-05): Grayjay's .old spare hid a broken newest
+# file behind an ever-older list, and read as current it "removed" newer videos.
 fresh
 printf 'garbage' > "$GRAYJAY_BACKUP"
 mk_backup "${GRAYJAY_BACKUP}.old" "📦 Guitar:::${GUITAR}" "$(yt aaaaaaaaaaa)" -- "📦 AddisonCore:::${ADDISON}"
 age_backup 1
 run_job; rc=$?
-is "an unreadable main backup falls back to .old" "$rc" "0"
-has "...and its videos are handed over" "$(calls)" "$(yt aaaaaaaaaaa)"
-has "...and the journal says which file was used" "$(cat "${TMP}/out")" "from .old"
-is "...silently" "$(titles)" ""
+is "a broken newest backup is Backup: Unreadable, even with a good .old beside it" "$(titles)" "Backup: Unreadable"
+has "...naming the file" "$(bodies)" "GrayjayBackup.ezip could not be opened"
+hasnt "...the .old spare is never read" "$(calls)" "$(yt aaaaaaaaaaa)"
+is "...and the run FAILS" "$( ((rc != 0)) && echo yes)" "yes"
 
 fresh
 printf 'garbage' > "$GRAYJAY_BACKUP"
@@ -345,7 +348,7 @@ age_backup 1
 run_job; rc=$?
 is "both files unreadable: Backup: Unreadable" "$(titles)" "Backup: Unreadable"
 is "...on the stable backup id" "$(ids)" "grayjay-backup"
-has "...saying neither could be opened" "$(bodies)" "Neither GrayjayBackup.ezip nor its .old copy could be opened"
+has "...saying it could not be opened" "$(bodies)" "GrayjayBackup.ezip could not be opened"
 is "...and the run FAILS (a worker that could not work)" "$( ((rc != 0)) && echo yes)" "yes"
 hasnt "...handing nothing over" "$(calls)" " add "
 
@@ -449,7 +452,7 @@ NOW=$(( T0 + 8 * DAY )); age_backup 1; abx_reset_calls
 run_job
 is "7 days from the first failure: Abandoned: 1 Video" "$(titles)" "Abandoned: 1 Video"
 has "...with the last reason" "$(bodies)" "Timed out after 2h"
-has "...and how to try again" "$(bodies)" "take it out of its playlist and put it back"
+hasnt "...without advice that cannot work for a channel's video (audit 2026-11-05)" "$(bodies)" "put it back"
 hasnt "...and no further retry" "$(calls)" "extract"
 is "...recorded abandoned" "$(rec fffffffffff .status)" "abandoned"
 clear_cap; abx_reset_calls
@@ -572,7 +575,7 @@ is "a FAILING video removed from the playlist stops being tracked" "$(rec pppppp
 is "a video removed MID-DOWNLOAD stops being tracked too" "$(rec qqqqqqqqqqq .status)" "removed"
 is "a SAVED video removed is left alone" "$(rec rrrrrrrrrrr .status)" "archived"
 hasnt "...nothing removed is retried" "$(calls)" "extract"
-hasnt "...or even looked up" "$(jq -r '.calls[] | join(" ")' "$FAKE")" "manage shell"
+is "...or even looked up" "$(jq -r '.asked | map(select(. == "ppppppppppp" or . == "qqqqqqqqqqq")) | length' "$FAKE")" "0"
 is "...and nothing is deleted in ArchiveBox (the copy and its tag stay)" \
    "$(abx ".snapshots[\"$(yt rrrrrrrrrrr)\"].tags | join(\",\")")" "Guitar"
 has "...the journal counts them" "$(cat "${TMP}/out")" "2 removed"
@@ -588,14 +591,18 @@ abx_snap "$(yt ppppppppppp)" sealed "Keeps Failing - YouTube" "" failed "403 For
 mk_backup "$GRAYJAY_BACKUP" "📦 Guitar:::${GUITAR}" "$(yt ppppppppppp)" -- "📦 AddisonCore:::${ADDISON}"
 NOW=$(( T0 + 10 * DAY )); age_backup 1
 run_job
-is "re-adding a removed failing video starts a NEW 7-day clock" \
-   "$(rec ppppppppppp '.first_failed_at | floor')" "$(( T0 + 10 * DAY ))"
-has "...retried at once on its existing snapshot" "$(calls)" "extract --plugins ytdlp"
-is "...first failure after re-adding: Dropped again" "$(titles)" "Dropped: 1 Video"
+has "re-added: retried at once on its existing snapshot" "$(calls)" "extract --plugins ytdlp"
+is "...WITHOUT announcing the old failure as a new one (audit 2026-11-05)" "$(titles)" ""
+is "...and no clock started before anything was tried" "$(rec ppppppppppp .first_failed_at)" "null"
 has "...the journal says it came back" "$(cat "${TMP}/out")" "1 added back"
+abx_snap "$(yt ppppppppppp)" sealed "Keeps Failing - YouTube" "" failed "403 Forbidden"
+NOW=$(( T0 + 11 * DAY )); age_backup 1; clear_cap
+run_job
+is "...the retry fails too: Dropped, on a NEW 7-day clock" "$(titles)" "Dropped: 1 Video"
+is "...counted from now" "$(rec ppppppppppp '.first_failed_at | floor')" "$(( T0 + 11 * DAY ))"
 clear_cap
 abx_snap "$(yt ppppppppppp)" sealed "Keeps Failing - YouTube" "" succeeded "x" "Keeps_Failing.mp4"
-NOW=$(( T0 + 11 * DAY )); age_backup 1
+NOW=$(( T0 + 12 * DAY )); age_backup 1
 run_job
 is "...and if it then saves, you are told: it had failed before" "$(titles)" "Archived: Keeps Failing"
 
@@ -640,7 +647,11 @@ abx_snap "$(yt sssssssssss)" sealed "Age Gated - YouTube" "" failed "Sign in to 
 mk_backup "$GRAYJAY_BACKUP" "📦 Guitar:::${GUITAR}" "$(yt sssssssssss)" -- "📦 AddisonCore:::${ADDISON}"
 NOW=$(( T0 + 12 * DAY )); age_backup 1; clear_cap
 run_job
-is "putting it back gives it a fresh start: Dropped again" "$(titles)" "Dropped: 1 Video"
+is "putting it back retries it quietly first" "$(titles)" ""
+abx_snap "$(yt sssssssssss)" sealed "Age Gated - YouTube" "" failed "Sign in to confirm your age"
+NOW=$(( T0 + 13 * DAY )); age_backup 1; clear_cap
+run_job
+is "...and a fresh start: Dropped again" "$(titles)" "Dropped: 1 Video"
 
 echo "what does NOT count as removed"
 fresh
@@ -719,6 +730,8 @@ run_job
 is "it is NOT let go: it is a failure, so you hear it was lost" "$(titles)" "Dropped: 1 Video"
 is "...and it stays tracked, its retry queued" "$(rec wwwwwwwwww2 .status)" "pending"
 abx_snap "$(yt wwwwwwwwww2)" sealed "Gone - YouTube" "" failed "Video unavailable"
+# Its neighbour saved meanwhile: nine days in line would now be a stuck backlog of its own.
+abx_snap "$(yt wwwwwwwwww1)" sealed "Kept - YouTube" "" succeeded "x" "Kept.webm"
 NOW=$(( T0 + 9 * DAY )); age_backup 1; clear_cap
 run_job
 is "...and after 7 days it is Abandoned like any other" "$(titles)" "Abandoned: 1 Video"
@@ -777,6 +790,114 @@ run_job; rc=$?
 is "add refused: ArchiveBox: Unreachable as well" "$(titles)" "ArchiveBox: Unreachable"
 is "...the run fails" "$( ((rc != 0)) && echo yes)" "yes"
 is "...and no record is written for a video that did not go over" "$(find "$GRAYJAY_STATE/videos" -name '*.json' 2>/dev/null | wc -l)" "0"
+
+# ============================================================ audit 2026-11-05
+echo "unfinished files that LOOK finished (Lessons 16 and 24, live)"
+fresh
+mk_backup "$GRAYJAY_BACKUP" "📦 Guitar:::${GUITAR}" "$(yt aaaaaaaaaa1)" "$(yt aaaaaaaaaa2)" "$(yt aaaaaaaaaa3)" -- "📦 AddisonCore:::${ADDISON}"
+NOW=$T0; age_backup 1
+run_job
+# Lesson 24: one of several audio tracks (format id 251-5) and a .part video.
+abx_snap "$(yt aaaaaaaaaa1)" sealed "Lesson 24 - YouTube" "" succeeded "x" "Lesson_24.f137.mp4.part" "Lesson_24.f251-5.webm"
+# Lesson 16: both streams, and the merge into .temp.webm killed partway.
+abx_snap "$(yt aaaaaaaaaa2)" sealed "Lesson 16 - YouTube" "" succeeded "x" "Lesson_16.f399.mp4" "Lesson_16.temp.webm" "Lesson_16.f251.webm"
+# A real title with a dot and an f in it is still a finished file.
+abx_snap "$(yt aaaaaaaaaa3)" sealed "Vol final - YouTube" "" succeeded "x" "Vol.final.webm"
+NOW=$(( T0 + DAY )); age_backup 1
+run_job
+is "a -N audio track and a .temp merge are both Dropped, not Archived" "$(titles)" "Dropped: 2 Videos"
+has "...as unfinished" "$(bodies)" "Download did not finish"
+is "...Lesson 24 is retried" "$(rec aaaaaaaaaa1 .status)" "pending"
+is "...Lesson 16 is retried" "$(rec aaaaaaaaaa2 .status)" "pending"
+is "a title like Vol.final.webm is still a finished video" "$(rec aaaaaaaaaa3 .status)" "archived"
+
+echo "a download stuck 'running'"
+fresh
+mk_backup "$GRAYJAY_BACKUP" "📦 Guitar:::${GUITAR}" "$(yt sssssssssss)" "$(yt ttttttttttt)" -- "📦 AddisonCore:::${ADDISON}"
+NOW=$T0; age_backup 1
+run_job
+abx_snap "$(yt sssssssssss)" started "Stuck - YouTube" ""
+abx_snap "$(yt ttttttttttt)" started "Landed - YouTube" "" started "x" "Landed.webm"
+NOW=$(( T0 + DAY / 2 )); age_backup 1
+run_job
+is "still running half a day later: waited for, silently" "$(titles)" ""
+is "...pending" "$(rec sssssssssss .status)" "pending"
+# Next morning's run, up to 10 minutes early from the timer's jitter.
+NOW=$(( T0 + DAY - 300 )); age_backup 1; abx_reset_calls; clear_cap
+run_job
+is "still running a day later: stuck, so Dropped like any failure" "$(titles)" "Dropped: 1 Video"
+has "...saying so" "$(bodies)" "Download stuck"
+has "...and retried" "$(calls)" "extract --plugins ytdlp --no-wait $(abx ".snapshots[\"$(yt sssssssssss)\"].id")"
+is "a snapshot still running whose video DID land is archived, not stuck" "$(rec ttttttttttt .status)" "archived"
+abx_snap "$(yt sssssssssss)" started "Stuck - YouTube" ""
+NOW=$(( T0 + DAY + DAY / 2 )); age_backup 1; clear_cap; abx_reset_calls
+run_job
+is "the stuck clock restarts with each retry" "$(rec sssssssssss .status)" "pending"
+hasnt "...so a retry half a day old is waited for, not retried again" "$(calls)" "extract"
+abx_snap "$(yt sssssssssss)" started "Stuck - YouTube" ""
+# First failed at T0 + DAY - 300; this run's jitter lands it 5 minutes short of 7 days.
+NOW=$(( T0 + 8 * DAY - 600 )); age_backup 1; clear_cap
+run_job
+is "stuck for 7 days from the first failure: Abandoned, on day 7 despite the jitter" "$(titles)" "Abandoned: 1 Video"
+
+echo "a video still waiting in line is a backlog, not stuck"
+fresh
+mk_backup "$GRAYJAY_BACKUP" "📦 Guitar:::${GUITAR}" "$(yt lllllllllll)" -- "📦 AddisonCore:::${ADDISON}"
+NOW=$T0; age_backup 1
+run_job   # the fake leaves it queued with no ytdlp result: waiting its turn
+NOW=$(( T0 + 2 * DAY )); age_backup 1; clear_cap
+run_job
+is "two days in line: still waited for, silently" "$(titles)" ""
+NOW=$(( T0 + 7 * DAY - 300 )); age_backup 1; clear_cap
+run_job
+is "seven days in line: stuck after all, Dropped" "$(titles)" "Dropped: 1 Video"
+has "...saying so" "$(bodies)" "Download stuck"
+
+echo "a broken newest backup removes nothing, with or without an .old beside it"
+fresh
+mk_backup "${GRAYJAY_BACKUP}.old" "📦 Guitar:::${GUITAR}" "$(yt aaaaaaaaaaa)" -- "📦 AddisonCore:::${ADDISON}"
+mk_backup "$GRAYJAY_BACKUP" "📦 Guitar:::${GUITAR}" "$(yt aaaaaaaaaaa)" "$(yt bbbbbbbbbbb)" -- "📦 AddisonCore:::${ADDISON}"
+NOW=$T0; age_backup 1
+run_job
+abx_snap "$(yt bbbbbbbbbbb)" sealed "Newer - YouTube" "" failed "403 Forbidden"
+NOW=$(( T0 + DAY )); age_backup 1
+run_job
+printf 'garbage' > "$GRAYJAY_BACKUP"
+abx_snap "$(yt bbbbbbbbbbb)" sealed "Newer - YouTube" "" failed "403 Forbidden"
+NOW=$(( T0 + 2 * DAY )); age_backup 1; clear_cap
+run_job
+is "a video newer than .old is NOT removed while the newest cannot be read" "$(rec bbbbbbbbbbb .status)" "pending"
+mk_backup "$GRAYJAY_BACKUP" "📦 Guitar:::${GUITAR}" "$(yt aaaaaaaaaaa)" "$(yt bbbbbbbbbbb)" -- "📦 AddisonCore:::${ADDISON}"
+abx_snap "$(yt bbbbbbbbbbb)" sealed "Newer - YouTube" "" failed "403 Forbidden"
+NOW=$(( T0 + 3 * DAY )); age_backup 1; clear_cap
+run_job
+hasnt "...so the next good backup sends no second Dropped" "$(titles)" "Dropped"
+
+echo "ArchiveBox down with a channel followed"
+fresh
+abx_channel "$CH" "K's Archives" yyyyyyyyyy1
+mk_backup "$GRAYJAY_BACKUP" "GROUP:Archive" "$CH"
+NOW=$T0; age_backup 1
+run_job
+abx_flag down; clear_cap
+NOW=$(( T0 + DAY )); age_backup 1
+run_job
+is "one outage, one message: no Channel: Unreadable beside it" "$(titles)" "ArchiveBox: Unreachable"
+abx_unflag down; clear_cap
+NOW=$(( T0 + 2 * DAY )); age_backup 1
+run_job
+hasnt "...and no Channel: Readable when it comes back" "$(titles)" "Channel"
+
+echo "ArchiveBox back on a day with nothing to follow"
+fresh
+mk_backup "$GRAYJAY_BACKUP" "📦 Guitar:::${GUITAR}" -- "📦 AddisonCore:::${ADDISON}"
+NOW=$T0; age_backup 1
+abx_flag down
+run_job
+is "nothing followed, ArchiveBox down: still noticed" "$(titles)" "ArchiveBox: Unreachable"
+abx_unflag down; clear_cap
+run_job
+is "...and its recovery still arrives on a quiet day" "$(titles)" "ArchiveBox: Reachable"
 
 # ===================================================================== the envelope
 echo "envelope"

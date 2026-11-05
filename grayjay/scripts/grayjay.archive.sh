@@ -68,8 +68,7 @@ publish() { # $1 = path to the JSON report
             items+=("$(jq -r ".abandoned[$i].title" "$r")"$'\t'"$(jq -r ".abandoned[$i].reason" "$r")")
         done
         title="$(title_count Abandoned "$n" Video)"
-        body="$(body_join "$(body_list "${items[@]}")" \
-            "Retried daily for 7 days. To try again, take it out of its playlist and put it back.")"
+        body="$(body_join "$(body_list "${items[@]}")" "Retried daily for 7 days.")"
         notify_fault "$title" "$body" 2>>"$SEND_ERR"
     fi
 
@@ -83,16 +82,20 @@ publish() { # $1 = path to the JSON report
     # --- a channel in the Archive group whose videos could not be listed -----------
     # Its videos already tracked are kept as they are (never "removed" on a failed
     # listing) and it is listed again tomorrow. Closed only when the listing works.
-    local chid url err
+    # Skipped entirely while ArchiveBox is unreachable: the listing runs inside its
+    # container, so every channel "fails" with it, and one outage would buzz once per
+    # channel and blame the channels. `ArchiveBox: Unreachable` below says it once.
+    local chid url err channels=.channels[]
+    [[ "$(jq -r '.archivebox' "$r")" == "unreachable" ]] && channels=empty
     while IFS=$'\t' read -r chid url err; do
         [[ -n "$chid" ]] || continue
         title="$(title_state Channel Unreadable)"
         body="$(body_join "$(body_fact "$err")" "Could not list the videos of ${url}. Its videos are kept as they are and it is tried again tomorrow.")"
         fault_open "${CHANNEL_NTFY_PREFIX}${chid}" "$title" "$body" 2>>"$SEND_ERR"
-    done < <(jq -r '.channels[] | select(.state == "unreadable") | [.id, .url, .error] | @tsv' "$r")
+    done < <(jq -r "${channels}"' | select(.state == "unreadable") | [.id, .url, .error] | @tsv' "$r")
     while IFS= read -r chid; do
         fault_close "${CHANNEL_NTFY_PREFIX}${chid}" Readable "Its videos are listed again." 2>>"$SEND_ERR"
-    done < <(jq -r '.channels[] | select(.state == "ok") | .id' "$r")
+    done < <(jq -r "${channels}"' | select(.state == "ok") | .id' "$r")
 
     # --- the backup itself: unreadable, or too old ---------------------------------
     local newest age last=""
@@ -105,7 +108,7 @@ publish() { # $1 = path to the JSON report
             body="No backup file exists in master/config. Grayjay may have stopped writing one, or written it somewhere else."
         else
             body="$(body_join "$(body_fact "$last")" \
-                "Neither GrayjayBackup.ezip nor its .old copy could be opened. The backup format may have changed.")"
+                "GrayjayBackup.ezip could not be opened. The backup format may have changed.")"
         fi
         fault_open "$BACKUP_NTFY_ID" "$title" "$body" 2>>"$SEND_ERR"
     elif [[ "$(jq -r '.backup.stale' "$r")" == "true" ]]; then
@@ -125,7 +128,7 @@ publish() { # $1 = path to the JSON report
         body="$(body_join "$(body_fact "$err")" \
             "$( (( waiting > 0 )) && printf '%s new videos were not handed over. ' "$waiting")Everything is tried again tomorrow.")"
         fault_open "$ARCHIVEBOX_NTFY_ID" "$title" "$body" 2>>"$SEND_ERR"
-    elif [[ "$(jq -r '.archivebox' "$r")" == "ok" && "$(jq -r '.archivebox_asked // false' "$r")" == "true" ]]; then
+    else
         fault_close "$ARCHIVEBOX_NTFY_ID" Reachable "Everything that was waiting is handed over again." 2>>"$SEND_ERR"
     fi
 
@@ -159,7 +162,7 @@ main() {
     fi
 
     # The journal line, and the body the courier quotes if this run fails.
-    jq -r '"grayjay: backup \(.backup.state)\(if .backup.used == "old" then " (from .old)" else "" end)"
+    jq -r '"grayjay: backup \(.backup.state)"
            + ", \(.handed) handed over, \(.retried) retried, \(.archived|length) archived"
            + ", \(.dropped|length) dropped, \(.abandoned|length) abandoned"
            + ", \(.adopted) adopted, \(.backfilled // 0) backfilled, \(.pending) pending"

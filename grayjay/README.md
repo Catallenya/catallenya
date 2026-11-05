@@ -18,7 +18,7 @@ unless something fails** (see Decisions below).
 
 ```
 phone: Grayjay auto-backup (every ~2 days, only while the app runs)
-   → master/config/GrayjayBackup.ezip  (+ .ezip.old), over Syncthing
+   → master/config/GrayjayBackup.ezip, over Syncthing (Grayjay's .ezip.old spare is never read)
 
 grayjay.archive.timer, daily 07:55 SGT
    → read the 📦 playlists and the Archive group's channels out of the backup
@@ -45,11 +45,13 @@ Settled with the owner on 2026-10-31 and 2026-11-01. Each one is enforced by a c
 | How often it checks | once a day, 07:55 SGT |
 | A video is taken out of the playlist while unfinished (failing, given up, or still downloading) | It stops being tracked, silently. Nothing in ArchiveBox is touched: a running download finishes on its own and keeps its copy |
 | A saved video is taken out of the playlist | Nothing changes. The copy and its playlist tag stay |
-| A video taken out is added back | A fresh start: a new 7-day clock, so it can be `Dropped` and `Abandoned` again; if it saves, `Archived` (it had failed before) |
-| A given-up video is still in the playlist | It stays given up, silently. Take it out and put it back to retry |
+| A video taken out is added back | A fresh start: it is retried first, quietly, then judged like a new video on a new 7-day clock, so it can be `Dropped` and `Abandoned` again; if it saves, `Archived` (it had failed before) |
+| A given-up video is still in the playlist | It stays given up, silently. To retry it, delete its record (`state/videos/<id>.json`); the next run tries again |
+| A download is still running a day after it was asked for, or still waiting in line after 7 | It is stuck, so it counts as a failure (`Download stuck`): `Dropped`, retried daily, `Abandoned` like any other |
 | The 📦 is taken off a playlist, the playlist is deleted, or a channel leaves the Archive group | It stops being followed: the same as taking each of its videos out. Saved copies and their tags stay |
 | A video vanishes from a channel still in the group (deleted, made private) before it was saved | **Not** let go: it is a failure, so `Dropped` then `Abandoned`. That loss is exactly what an archive is for, so you are told |
-| A channel cannot be listed, or the backup cannot be read | Nothing counts as "taken out"; `Channel: Unreadable` or `Backup: Unreadable` is sent instead |
+| A channel cannot be listed, or the backup cannot be read | Nothing counts as "taken out"; `Channel: Unreadable` or `Backup: Unreadable` is sent instead. While ArchiveBox is down only `ArchiveBox: Unreachable` is sent: the listing runs inside it, so every channel would fail with it |
+| The newest backup cannot be opened | `Backup: Unreadable` that morning, even if Grayjay's older spare (`.ezip.old`) would open: the spare only hid a broken newest file behind an ever-older list. Nothing is handed over or taken out; it tries again tomorrow |
 | A followed playlist or channel is renamed | New videos get the new tag; videos already tagged keep the old one too |
 
 ## Files
@@ -78,7 +80,7 @@ whole truth about that video:
 | `abandoned` | still failing 7 days after the FIRST failure; never retried again |
 | `removed` | no longer followed while unfinished; no longer tracked. Follow it again for a fresh start |
 
-To retry an abandoned video, take it out of the playlist and put it back (or delete its record). To start over completely, delete
+To retry an abandoned video, delete its record. To start over completely, delete
 `state/`: every video whose snapshot already holds the video is adopted again, nothing
 is downloaded twice.
 
@@ -105,7 +107,10 @@ is downloaded twice.
   a timeout falls between yt-dlp's separate video and audio downloads, and the first
   backfill also produced the reverse: a result marked failed, with no message, holding a
   complete hour-long merged `.webm`. A video counts as archived exactly when a merged,
-  non-partial media file is present, whatever the status says.
+  non-partial media file is present, whatever the status says. "Partial" covers more
+  than `.part`: a stream with any format id (`.f251.`, `.f251-5.`, `.fhls-720p.`) and a
+  merge killed partway (`.temp.webm`) both carry real media extensions. Two videos were
+  counted saved that way until 2026-11-05.
 - **`YTDLP_MAX_SIZE=5000m` is a preference, not a cap.** The plugin's format selector
   is `(bv*+ba/b)[filesize<=5000m]/(bv*+ba/b)`, which falls back to the best format with
   no size limit. A video over 5 GB downloads anyway, or hits the 2-hour

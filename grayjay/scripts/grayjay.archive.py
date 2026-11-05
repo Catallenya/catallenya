@@ -60,6 +60,16 @@ DAY = 86400
 GIVE_UP = 7 * DAY      # from the FIRST failure, never the last attempt (playbook)
 NO_SNAPSHOT_GRACE = DAY  # `add --bg` returns before the snapshot exists
 STALE_AFTER = 7 * DAY
+# Daily runs are not exactly 24h apart: the timer's RandomizedDelaySec=5min puts two runs
+# up to 10 minutes nearer, so "7 days later" could read 6d 23h 55m and slip to day 8. Every
+# day-counted threshold allows this much; it is far below a day, so it never moves one.
+RUN_SLACK = 3600
+# A download ArchiveBox still calls running a day after it was asked for is stuck (a
+# killed worker or a restart leaves it so), not slow: a 2h yt-dlp timeout is the most one
+# attempt can take. A snapshot merely waiting in line gets GIVE_UP instead. Without a
+# bound either was pending forever: never retried, never Abandoned, never announced
+# (audit 2026-11-05).
+STUCK_AFTER = DAY
 
 HEADER = bytes.fromhex("11223344474a0100")   # magic, "GJ", version 1, flags 0 (unencrypted)
 EOCD = b"PK\x05\x06"
@@ -74,7 +84,17 @@ MEDIA = {
 # then merges them. A timeout between the two leaves a finished, video-only `.fNNN.`
 # file, and the plugin counts ANY media file as success — measured in its source, not
 # assumed: `except TimeoutExpired: output = selected_output(...); if output: return True`.
-FORMAT_PART = re.compile(r"\.f\d+\.[A-Za-z0-9]+$")
+# A format id is not always bare digits: `f251-5` (one of several audio tracks), `f140-drc`,
+# `fhls-720p`. And a merge killed partway leaves `Title.temp.webm`, a real media extension
+# on half a file. Both were found counted as archived on 2026-11-05 (Lesson 24 held only
+# `.f251-5.webm` + a `.part`; Lesson 16 a `.temp.webm` beside its two unmerged streams).
+FORMAT_PART = re.compile(r"\.f(?:\d+(?:-\w+)*|(?:hls|dash|http)-[\w-]+)\.[A-Za-z0-9]+$")
+MERGE_TEMP = re.compile(r"\.temp\.[A-Za-z0-9]+$")
+
+
+def unfinished(name):
+    return (name.endswith((".part", ".ytdl")) or bool(FORMAT_PART.search(name))
+            or bool(MERGE_TEMP.search(name)))
 
 
 def log(msg):
@@ -159,22 +179,24 @@ def channel_id(url):
 
 
 def read_backup():
-    """({"playlists", "groups"} or None, which file, newest mtime or None).
+    """({"playlists", "groups"} or None, its mtime or None).
 
-    The newest mtime is taken over BOTH files whether or not they parse: staleness is a
-    question about the phone, not about whether we could read what it sent.
+    The NEWEST backup only, never Grayjay's `.ezip.old` spare (owner, 2026-11-05). The
+    spare protected against nothing real: Syncthing swaps a file in only once complete,
+    the junk-tail overwrite is cut away by open_backup(), and a format change breaks the
+    spare too. What it did do was hide a broken newest file behind an ever-older list,
+    and, read as current, mark everything added since as removed (audit 2026-11-05). A
+    broken newest file is now `Backup: Unreadable` that morning; the mtime is still
+    reported, because staleness is a question about the phone, not about the parse.
     """
-    candidates = [BACKUP, BACKUP.with_name(BACKUP.name + ".old")]
-    mtimes = [p.stat().st_mtime for p in candidates if p.is_file()]
-    newest = max(mtimes) if mtimes else None
-    for label, path in zip(("main", "old"), candidates):
-        if not path.is_file():
-            continue
-        try:
-            return open_backup(path), label, newest
-        except (OSError, ValueError) as e:
-            log("backup %s unreadable: %s" % (path.name, e))
-    return None, None, newest
+    if not BACKUP.is_file():
+        return None, None
+    newest = BACKUP.stat().st_mtime
+    try:
+        return open_backup(BACKUP), newest
+    except (OSError, ValueError) as e:
+        log("backup %s unreadable: %s" % (BACKUP.name, e))
+        return None, newest
 
 
 # ------------------------------------------------------------------------- the URLs
@@ -331,7 +353,7 @@ def complete_media(files):
     for f in files:
         name = f.rsplit("/", 1)[-1]
         ext = os.path.splitext(name)[1].lower()
-        if ext in MEDIA and not FORMAT_PART.search(name):
+        if ext in MEDIA and not unfinished(name):
             return True
     return False
 
@@ -343,7 +365,7 @@ def reason(ytdlp):
     if m:
         return "Timed out after " + compact(m.group(1))
     files = ytdlp.get("files") or []
-    if any(f.endswith((".part", ".ytdl")) or FORMAT_PART.search(f) for f in files):
+    if any(unfinished(f.rsplit("/", 1)[-1]) for f in files):
         return "Download did not finish"
     errors = [l.strip() for l in text.splitlines() if l.strip().startswith("ERROR:")]
     if errors:
@@ -424,17 +446,14 @@ def main():
               "retried": 0, "adopted": 0, "backfilled": 0, "pending": 0, "removed": 0,
               "readded": 0}
 
-    data, used, newest = read_backup()
+    data, newest = read_backup()
     playlists = data["playlists"] if data is not None else None
     report["backup"] = {
         "state": "ok" if playlists is not None else "unreadable",
-        "used": used,
         "newest": newest,
         "stale": newest is None or NOW - newest > STALE_AFTER,
         "age_days": int((NOW - newest) // DAY) if newest else None,
     }
-    if used == "old":
-        log("main backup unreadable; used GrayjayBackup.ezip.old")
 
     wanted = {}   # key -> {"url", "alt", "tags", "channel"}
 
@@ -513,12 +532,11 @@ def main():
         items.append({"key": k, "url": src["url"], "alt": src["alt"], "tags": tags,
                       "channel": wanted.get(k, {}).get("channel") or rec.get("channel")})
 
-    # Whether ArchiveBox was actually asked this run. "ok" is the report's DEFAULT, so on
-    # its own it cannot tell "answered" from "never asked"; the shell closes an open
-    # ArchiveBox fault only on a run that really reached it.
-    report["archivebox_asked"] = bool(items)
+    # ArchiveBox is asked every run, even with nothing to ask about: an empty question
+    # is one cheap exec, and it is what lets an open `ArchiveBox: Unreachable` close on a
+    # quiet day (audit 2026-11-05) — a run that never asked could not say it was back.
     try:
-        facts = abx_query(items) if items else {}
+        facts = abx_query(items)
     except Unreachable as e:
         report["archivebox"] = "unreachable"
         report["archivebox_error"] = str(e)
@@ -568,6 +586,14 @@ def main():
                 save(rec)
                 to_add.setdefault(tuple(rec["tags"]), []).append(rec)
                 continue
+            # Its snapshot still holds the result from BEFORE it was taken out. Judging
+            # that now would announce an old failure as a new one, before anything was
+            # tried (audit 2026-11-05): try again first, judge tomorrow. A copy that
+            # saved while it was out falls through and is archived as usual.
+            if verdict(f)[0] == "failed":
+                rec["snapshot_id"] = f.get("id")
+                to_retry.append(rec)
+                continue
         if rec["status"] == "adopted" and f.get("exists"):
             if backfill(rec, f, to_retry, report):
                 continue   # judged tomorrow, like any fresh hand-over
@@ -578,10 +604,20 @@ def main():
             rec["snapshot_id"] = f.get("id")
             rec["title"] = clean_title(f.get("title"), rec.get("title") or rec["url"])
         state, why = verdict(f)
+        asked = max(rec.get("handed_over_at") or 0, rec.get("retried_at") or 0) or NOW
+        # Still waiting in line (queued, nothing run yet) is a backlog, not a stuck
+        # download: a new channel can queue hundreds of videos at once.
+        in_line = f.get("status") == "queued" and not f.get("ytdlp")
         if state == "absent" and NOW - rec.get("handed_over_at", NOW) < NO_SNAPSHOT_GRACE:
             state = "pending"
         elif state == "absent":
             state, why = "failed", "ArchiveBox never created a snapshot"
+        elif state == "pending" and NOW - asked >= (GIVE_UP if in_line else STUCK_AFTER) - RUN_SLACK:
+            # The snapshot may be the stuck part while the video itself landed.
+            if complete_media((f.get("ytdlp") or {}).get("files") or []):
+                state = "archived"
+            else:
+                state, why = "failed", "Download stuck"
 
         if state == "pending":
             report["pending"] += 1
@@ -601,7 +637,7 @@ def main():
             if not rec.get("first_failed_at"):
                 rec["first_failed_at"] = NOW
                 report["dropped"].append({"title": title, "reason": why})
-            elif NOW - rec["first_failed_at"] >= GIVE_UP:
+            elif NOW - rec["first_failed_at"] >= GIVE_UP - RUN_SLACK:
                 rec["status"] = "abandoned"
                 save(rec)
                 report["abandoned"].append({"title": title, "reason": why})
@@ -630,6 +666,7 @@ def main():
             abx_retry([r["snapshot_id"] for r in to_retry])
             for r in to_retry:
                 r["status"] = "pending"
+                r["retried_at"] = NOW   # the stuck clock restarts with each attempt
                 save(r)
             report["retried"] += sum(1 for r in to_retry if r.get("backfilled_at") != NOW)
     except Unreachable as e:
