@@ -32,7 +32,8 @@ publish() { # $1 = path to the JSON report
     # --- recoveries: a video you were told had FAILED is now safely in ArchiveBox ---
     # The only good news this pipeline sends (owner, 2026-10-31): a normal save is
     # silent, however many arrive, and the phone hears only about problems. A video that
-    # was Dropped or Abandoned and later saves closes its own loop with this.
+    # was Dropped and later saves closes its own loop with this. An Abandoned one is
+    # never looked at again, so it cannot.
     n="$(jq '[.archived[] | select(.recovered)] | length' "$r")"
     if (( n > 0 )); then
         items=()

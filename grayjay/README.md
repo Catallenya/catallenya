@@ -40,7 +40,7 @@ Settled with the owner on 2026-10-31 and 2026-11-01. Each one is enforced by a c
 |---|---|
 | A video saves | **Nothing is sent.** The phone hears only about problems |
 | A video fails to download | `Dropped` once, silent daily retries, `Abandoned` 7 days after the FIRST failure. Two messages per video, never more |
-| A video that failed later saves | `Archived: <title>`, the one piece of good news, so a failure you were told about is always closed |
+| A video that failed later saves | `Archived: <title>`, the one piece of good news, so a `Dropped` you were told about is closed. Not after `Abandoned`: an abandoned video is never looked at again, so one you save by hand afterwards stays silent |
 | A system problem lasts days (ArchiveBox down, backup over 7 days old, a channel that cannot be listed, backup unreadable) | ONE notification that refreshes itself each morning until fixed: at most one buzz a day, never a pile |
 | How often it checks | once a day, 07:55 SGT |
 | A video is taken out of the playlist while unfinished (failing, given up, or still downloading) | It stops being tracked, silently. Nothing in ArchiveBox is touched: a running download finishes on its own and keeps its copy |

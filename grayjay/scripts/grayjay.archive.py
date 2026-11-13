@@ -22,8 +22,10 @@ been dealt with; the record says how.
     removed    taken out of every playlist while unfinished; no longer tracked (silent)
 
 WHAT THE PHONE HEARS (owner, 2026-10-31): only problems. A video that saves is silent,
-however many arrive; the one exception is a video you were TOLD had failed (Dropped or
-Abandoned) that later saves after all, which sends `Archived: <title>` to close the loop.
+however many arrive; the one exception is a video you were TOLD had failed (Dropped)
+that later saves after all, which sends `Archived: <title>` to close the loop. An
+Abandoned video is never looked at again, so it cannot: one saved by hand afterwards
+stays silent, and you already know.
 
 There is deliberately NO "backup unchanged, skip" shortcut, although the brief suggested
 one. Parsing the backup costs ~20 ms, and a remembered checksum is exactly the kind of
@@ -358,23 +360,33 @@ def complete_media(files):
     return False
 
 
+def ytdlp_error(text):
+    """yt-dlp's last ERROR line, cause only; None when it printed none."""
+    errors = [l.strip() for l in text.splitlines() if l.strip().startswith("ERROR:")]
+    if not errors:
+        return None
+    msg = re.sub(r"^ERROR:\s*(\[[^\]]+\]\s*)?([A-Za-z0-9_-]{11}:\s*)?", "", errors[-1])
+    # First sentence only. yt-dlp follows the cause with advice and two wiki URLs
+    # ("Sign in to confirm your age. Use --cookies-from-browser … See https://…"),
+    # which is a paragraph on a lock screen and says nothing the cause does not.
+    return msg.split(". ", 1)[0].rstrip(".")[:140]
+
+
 def reason(ytdlp):
     """One line saying why there is no video. No full stop: it is a DETAIL line."""
     text = (ytdlp.get("output") or "") + "\n" + (ytdlp.get("notes") or "")
     m = re.search(r"[Tt]imed out after (\d+) seconds", text)
     if m:
         return "Timed out after " + compact(m.group(1))
+    err = ytdlp_error(text)
     files = ytdlp.get("files") or []
     if any(unfinished(f.rsplit("/", 1)[-1]) for f in files):
-        return "Download did not finish"
-    errors = [l.strip() for l in text.splitlines() if l.strip().startswith("ERROR:")]
-    if errors:
-        msg = re.sub(r"^ERROR:\s*(\[[^\]]+\]\s*)?([A-Za-z0-9_-]{11}:\s*)?", "", errors[-1])
-        # First sentence only. yt-dlp follows the cause with advice and two wiki URLs
-        # ("Sign in to confirm your age. Use --cookies-from-browser … See https://…"),
-        # which is a paragraph on a lock screen and says nothing the cause does not.
-        msg = msg.split(". ", 1)[0]
-        return msg.rstrip(".")[:140] or "yt-dlp reported an error"
+        # The leftover files say THAT it stopped; yt-dlp's ERROR line, when it printed
+        # one, says WHY. Appended, never substituted: the files are the verdict, and a
+        # stuck merge (Lesson 16, 2026-11-13: a damaged picture stream) prints no error.
+        return "Download did not finish: " + err if err else "Download did not finish"
+    if err is not None:
+        return err or "yt-dlp reported an error"
     # The plugin's own one-liners: "404 Not Found", "403 Forbidden", "No media found",
     # "Unable to extract media info", "yt-dlp terminated before producing media".
     first = (ytdlp.get("output") or "").strip().splitlines()

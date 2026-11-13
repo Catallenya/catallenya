@@ -511,6 +511,17 @@ hasnt "...and is not downloaded again" "$(calls)" "$(abx ".snapshots[\"$(yt oooo
 has "a 'succeeded' result with only an audio stream and a .part is DROPPED" "$(titles)" "Dropped: 1 Video"
 has "...naming it" "$(bodies)" "Guitar Cover"
 has "...as unfinished" "$(bodies)" "Download did not finish"
+# Unfinished files say THAT it stopped; an ERROR line, when there is one, says WHY, and
+# is appended rather than substituted.
+clear_cap
+mk_backup "$GRAYJAY_BACKUP" "📦 Guitar:::${GUITAR}" "$(yt cutoff12345)" -- "📦 AddisonCore:::${ADDISON}"
+NOW=$T0; age_backup 1
+run_job
+abx_snap "$(yt cutoff12345)" sealed "Cut Off - YouTube" "" failed $'ERROR: [youtube] cutoff12345: Postprocessing: Conversion failed. Try again later.\n' "Cut_Off.f399.mp4" "Cut_Off.temp.webm"
+NOW=$(( T0 + DAY )); age_backup 1
+run_job
+has "unfinished files WITH an error line carry both" "$(bodies)" "Download did not finish: Postprocessing: Conversion failed"
+hasnt "...first sentence only" "$(bodies)" "Try again later"
 
 # Real output from the first live run (2026-10-19): an age-restricted video.
 clear_cap
